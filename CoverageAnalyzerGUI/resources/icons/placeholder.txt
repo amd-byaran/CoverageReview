@@ -1,0 +1,11 @@
+# Icon Placeholder
+
+This folder will contain icon resources for the application.
+Icons needed:
+- new.png (16x16) - New project icon
+- open.png (16x16) - Open project icon  
+- save.png (16x16) - Save icon
+- run.png (16x16) - Run coverage analysis icon
+- parse.png (16x16) - Parse coverage data icon
+
+For now, the application will use text-based buttons until icons are added.
