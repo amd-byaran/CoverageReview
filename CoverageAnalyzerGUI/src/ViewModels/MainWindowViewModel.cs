@@ -14,10 +14,13 @@ namespace CoverageAnalyzerGUI.ViewModels
 
         public MainWindowViewModel()
         {
+            SolutionExplorerViewModel = new SolutionExplorerViewModel();
             InitializeCommands();
         }
 
         #region Properties
+
+        public SolutionExplorerViewModel SolutionExplorerViewModel { get; }
 
         public string StatusText
         {
@@ -198,22 +201,23 @@ namespace CoverageAnalyzerGUI.ViewModels
         {
             StatusText = "Parsing coverage data...";
             ParserStatus = "Parsing";
-            AddToOutput("Starting coverage data parsing...");
+            AddToOutput("Starting coverage data parsing using DLL parsers...");
             
-            // TODO: Implement coverage data parsing using the DLL parsers
-            // This will use the CoverageParser DLL to parse hierarchy.txt, modinfo.txt, etc.
-            
-            // Simulate some work
+            // Use the actual DLL parsers through the SolutionExplorerViewModel
             System.Threading.Tasks.Task.Run(async () =>
             {
-                await System.Threading.Tasks.Task.Delay(1500);
+                await System.Threading.Tasks.Task.Delay(500); // Brief delay for UI responsiveness
+                
                 Application.Current.Dispatcher.Invoke(() =>
                 {
+                    // Trigger the actual DLL parsing
+                    SolutionExplorerViewModel.LoadDataCommand.Execute(null);
+                    
                     StatusText = "Parsing complete";
                     ParserStatus = "Loaded";
-                    FileCount = 8; // Example file count
-                    AddToOutput("Coverage data parsing completed successfully.");
-                    AddToOutput("Loaded: hierarchy.txt, modinfo.txt, modlist.txt, tests.txt, dashboard.txt");
+                    FileCount = 2; // CoverageParser + FunctionalParser
+                    AddToOutput("Coverage data parsing completed using DLL parsers.");
+                    AddToOutput("Loaded hierarchy from CoverageParser and FunctionalParser DLLs.");
                 });
             });
         }

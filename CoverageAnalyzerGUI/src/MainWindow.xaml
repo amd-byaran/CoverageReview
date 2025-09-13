@@ -92,106 +92,34 @@
                     </Border>
                     
                     <!-- Solution Explorer Content -->
-                    <TreeView Grid.Row="1" Name="SolutionExplorer" Background="White" BorderThickness="0" Margin="4">
-                        <TreeViewItem Header="Coverage" IsExpanded="True">
-                            <!-- CoverageParser Data -->
-                            <TreeViewItem Header="CoverageParser" IsExpanded="True">
-                                <TreeViewItem Header="Hierarchy Parser" IsExpanded="True">
-                                    <TreeViewItem Header="top" IsExpanded="True">
-                                        <TreeViewItem Header="cpu" IsExpanded="False">
-                                            <TreeViewItem Header="core0"/>
-                                            <TreeViewItem Header="core1"/>
-                                            <TreeViewItem Header="cache"/>
-                                        </TreeViewItem>
-                                        <TreeViewItem Header="memory" IsExpanded="False">
-                                            <TreeViewItem Header="ddr_ctrl"/>
-                                            <TreeViewItem Header="sram"/>
-                                        </TreeViewItem>
-                                        <TreeViewItem Header="io" IsExpanded="False">
-                                            <TreeViewItem Header="pcie"/>
-                                            <TreeViewItem Header="usb"/>
-                                        </TreeViewItem>
-                                    </TreeViewItem>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Module Information" IsExpanded="False">
-                                    <TreeViewItem Header="cpu_core (Instance: cpu.core0)"/>
-                                    <TreeViewItem Header="cpu_core (Instance: cpu.core1)"/>
-                                    <TreeViewItem Header="cache_ctrl (Instance: cpu.cache)"/>
-                                    <TreeViewItem Header="ddr_controller (Instance: memory.ddr_ctrl)"/>
-                                    <TreeViewItem Header="sram_ctrl (Instance: memory.sram)"/>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Module List" IsExpanded="False">
-                                    <TreeViewItem Header="cpu_core (Coverage: 85.2%)"/>
-                                    <TreeViewItem Header="cache_ctrl (Coverage: 92.7%)"/>
-                                    <TreeViewItem Header="ddr_controller (Coverage: 78.9%)"/>
-                                    <TreeViewItem Header="sram_ctrl (Coverage: 95.1%)"/>
-                                    <TreeViewItem Header="pcie_ctrl (Coverage: 67.3%)"/>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Test Execution" IsExpanded="False">
-                                    <TreeViewItem Header="basic_functionality_test (PASSED)"/>
-                                    <TreeViewItem Header="stress_test (PASSED)"/>
-                                    <TreeViewItem Header="power_management_test (FAILED)"/>
-                                    <TreeViewItem Header="corner_case_test (PASSED)"/>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Dashboard Data" IsExpanded="False">
-                                    <TreeViewItem Header="Overall Coverage: 82.4%"/>
-                                    <TreeViewItem Header="Line Coverage: 87.1%"/>
-                                    <TreeViewItem Header="Branch Coverage: 75.8%"/>
-                                    <TreeViewItem Header="Toggle Coverage: 84.3%"/>
-                                </TreeViewItem>
-                            </TreeViewItem>
-                            
-                            <!-- FunctionalParser Data -->
-                            <TreeViewItem Header="FunctionalParser" IsExpanded="True">
-                                <TreeViewItem Header="Coverage Groups" IsExpanded="True">
-                                    <TreeViewItem Header="CPU_Operations" IsExpanded="False">
-                                        <TreeViewItem Header="arithmetic_ops (Coverage: 95.2%)"/>
-                                        <TreeViewItem Header="logic_ops (Coverage: 88.7%)"/>
-                                        <TreeViewItem Header="branch_ops (Coverage: 76.4%)"/>
-                                        <TreeViewItem Header="memory_ops (Coverage: 92.1%)"/>
-                                    </TreeViewItem>
-                                    <TreeViewItem Header="Memory_Access" IsExpanded="False">
-                                        <TreeViewItem Header="read_operations (Coverage: 89.3%)"/>
-                                        <TreeViewItem Header="write_operations (Coverage: 91.8%)"/>
-                                        <TreeViewItem Header="cache_hits (Coverage: 94.5%)"/>
-                                        <TreeViewItem Header="cache_misses (Coverage: 67.2%)"/>
-                                    </TreeViewItem>
-                                    <TreeViewItem Header="IO_Operations" IsExpanded="False">
-                                        <TreeViewItem Header="pcie_transactions (Coverage: 78.9%)"/>
-                                        <TreeViewItem Header="usb_transfers (Coverage: 85.6%)"/>
-                                        <TreeViewItem Header="interrupt_handling (Coverage: 72.4%)"/>
-                                    </TreeViewItem>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Coverage Points" IsExpanded="False">
-                                    <TreeViewItem Header="Total Points: 156"/>
-                                    <TreeViewItem Header="Covered Points: 132"/>
-                                    <TreeViewItem Header="Uncovered Points: 24"/>
-                                    <TreeViewItem Header="Coverage Percentage: 84.6%"/>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Cross Coverage" IsExpanded="False">
-                                    <TreeViewItem Header="CPU_Memory_Cross (Coverage: 76.8%)"/>
-                                    <TreeViewItem Header="Memory_IO_Cross (Coverage: 69.2%)"/>
-                                    <TreeViewItem Header="CPU_IO_Cross (Coverage: 82.1%)"/>
-                                </TreeViewItem>
-                            </TreeViewItem>
-                            
-                            <!-- ExclusionParser Data -->
-                            <TreeViewItem Header="ExclusionParser" IsExpanded="False">
-                                <TreeViewItem Header="Active Exclusions" IsExpanded="False">
-                                    <TreeViewItem Header="Reset Logic Exclusions (12 rules)"/>
-                                    <TreeViewItem Header="Clock Domain Crossings (8 rules)"/>
-                                    <TreeViewItem Header="Debug Interface Exclusions (5 rules)"/>
-                                    <TreeViewItem Header="Test Mode Exclusions (15 rules)"/>
-                                </TreeViewItem>
-                                <TreeViewItem Header="Exclusion Summary" IsExpanded="False">
-                                    <TreeViewItem Header="Total Exclusions: 40"/>
-                                    <TreeViewItem Header="Active Rules: 38"/>
-                                    <TreeViewItem Header="Disabled Rules: 2"/>
-                                    <TreeViewItem Header="Excluded Lines: 1,247"/>
-                                </TreeViewItem>
-                            </TreeViewItem>
-                        </TreeViewItem>
-                    </TreeView>
+                    <Grid Grid.Row="1">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <!-- Load Data Button -->
+                        <Button Grid.Row="0" Name="LoadDataButton" Content="Load Parser Data" 
+                               Margin="4" Padding="4,2" 
+                               Command="{Binding SolutionExplorerViewModel.LoadDataCommand}"
+                               Background="#E1E1E1" BorderBrush="#C0C0C0"/>
+                        
+                        <!-- TreeView bound to ViewModel -->
+                        <TreeView Grid.Row="1" Name="SolutionExplorer" Background="White" BorderThickness="0" Margin="4"
+                                 ItemsSource="{Binding SolutionExplorerViewModel.TreeItems}">
+                            <TreeView.ItemContainerStyle>
+                                <Style TargetType="TreeViewItem">
+                                    <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                    <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                </Style>
+                            </TreeView.ItemContainerStyle>
+                            <TreeView.ItemTemplate>
+                                <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                    <TextBlock Text="{Binding Header}" FontSize="12"/>
+                                </HierarchicalDataTemplate>
+                            </TreeView.ItemTemplate>
+                        </TreeView>
+                    </Grid>
                 </Grid>
             </Border>
 
