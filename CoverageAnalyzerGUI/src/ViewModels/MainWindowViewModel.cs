@@ -1,6 +1,8 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Threading;
 using CoverageAnalyzerGUI.Commands;
 
 namespace CoverageAnalyzerGUI.ViewModels
@@ -10,12 +12,19 @@ namespace CoverageAnalyzerGUI.ViewModels
         private string _statusText = "Ready";
         private string _parserStatus = "Not Loaded";
         private int _fileCount = 0;
-        private string _outputText = "Coverage Analyzer - Ready\nWaiting for coverage data to parse...";
+        private string _outputText = "Coverage Analyzer - Ready\nClick 'Parse Coverage Data' or 'Load Data' to load coverage information...";
 
         public MainWindowViewModel()
         {
             SolutionExplorerViewModel = new SolutionExplorerViewModel();
             InitializeCommands();
+            
+            // Initialize with welcome message
+            AddToOutput("Welcome to Coverage Analyzer GUI");
+            AddToOutput("Ready to parse coverage data from DLL parsers");
+            
+            // Initialize with light theme
+            SetTheme("Light");
         }
 
         #region Properties
@@ -67,6 +76,8 @@ namespace CoverageAnalyzerGUI.ViewModels
         public ICommand ParseCoverageDataCommand { get; private set; } = null!;
         public ICommand OptionsCommand { get; private set; } = null!;
         public ICommand AboutCommand { get; private set; } = null!;
+        public ICommand SetLightThemeCommand { get; private set; } = null!;
+        public ICommand SetDarkThemeCommand { get; private set; } = null!;
 
         #endregion
 
@@ -91,6 +102,8 @@ namespace CoverageAnalyzerGUI.ViewModels
             ParseCoverageDataCommand = new RelayCommand(ExecuteParseCoverageData);
             OptionsCommand = new RelayCommand(ExecuteOptions);
             AboutCommand = new RelayCommand(ExecuteAbout);
+            SetLightThemeCommand = new RelayCommand(ExecuteSetLightTheme);
+            SetDarkThemeCommand = new RelayCommand(ExecuteSetDarkTheme);
         }
 
         private void ExecuteNewProject()
@@ -199,27 +212,44 @@ namespace CoverageAnalyzerGUI.ViewModels
 
         private void ExecuteParseCoverageData()
         {
-            StatusText = "Parsing coverage data...";
-            ParserStatus = "Parsing";
-            AddToOutput("Starting coverage data parsing using DLL parsers...");
-            
-            // Use the actual DLL parsers through the SolutionExplorerViewModel
-            System.Threading.Tasks.Task.Run(async () =>
+            try
             {
-                await System.Threading.Tasks.Task.Delay(500); // Brief delay for UI responsiveness
+                StatusText = "Parsing coverage data...";
+                ParserStatus = "Parsing";
+                AddToOutput("=== PARSE COVERAGE DATA BUTTON CLICKED ===");
+                AddToOutput("Starting coverage data parsing using DLL parsers...");
                 
-                Application.Current.Dispatcher.Invoke(() =>
+                // Force UI update
+                System.Windows.Application.Current.Dispatcher.Invoke(() => { }, System.Windows.Threading.DispatcherPriority.Render);
+                
+                AddToOutput("Calling SolutionExplorerViewModel.LoadDataCommand...");
+                
+                // Execute the load command
+                if (SolutionExplorerViewModel.LoadDataCommand.CanExecute(null))
                 {
-                    // Trigger the actual DLL parsing
                     SolutionExplorerViewModel.LoadDataCommand.Execute(null);
-                    
-                    StatusText = "Parsing complete";
-                    ParserStatus = "Loaded";
-                    FileCount = 2; // CoverageParser + FunctionalParser
-                    AddToOutput("Coverage data parsing completed using DLL parsers.");
-                    AddToOutput("Loaded hierarchy from CoverageParser and FunctionalParser DLLs.");
-                });
-            });
+                    AddToOutput("LoadDataCommand executed successfully");
+                }
+                else
+                {
+                    AddToOutput("ERROR: LoadDataCommand.CanExecute returned false");
+                }
+                
+                StatusText = "Parsing complete";
+                ParserStatus = "Loaded";
+                FileCount = 2; // CoverageParser + FunctionalParser
+                AddToOutput("Coverage data parsing completed.");
+                AddToOutput("Check Solution Explorer for loaded data.");
+                AddToOutput("=== PARSE COVERAGE DATA COMPLETED ===");
+            }
+            catch (Exception ex)
+            {
+                StatusText = "Parsing failed";
+                ParserStatus = "Error";
+                AddToOutput($"ERROR during parsing: {ex.Message}");
+                AddToOutput($"Stack trace: {ex.StackTrace}");
+                System.Diagnostics.Debug.WriteLine($"ExecuteParseCoverageData error: {ex}");
+            }
         }
 
         private void ExecuteOptions()
@@ -242,6 +272,58 @@ namespace CoverageAnalyzerGUI.ViewModels
                 "About Coverage Analyzer",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
+        }
+
+        private void ExecuteSetLightTheme()
+        {
+            SetTheme("Light");
+            AddToOutput("Switched to Light theme");
+        }
+
+        private void ExecuteSetDarkTheme()
+        {
+            SetTheme("Dark");
+            AddToOutput("Switched to Dark theme");
+        }
+
+        private void SetTheme(string themeName)
+        {
+            try
+            {
+                // Clear existing theme resources
+                Application.Current.Resources.MergedDictionaries.Clear();
+
+                // Create new resource dictionary for the theme
+                ResourceDictionary themeDict = new ResourceDictionary();
+
+                if (themeName == "Dark")
+                {
+                    // Dark theme colors
+                    themeDict["WindowBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(45, 45, 48));
+                    themeDict["ControlBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(37, 37, 38));
+                    themeDict["TextForegroundBrush"] = new SolidColorBrush(Color.FromRgb(241, 241, 241));
+                    themeDict["BorderBrush"] = new SolidColorBrush(Color.FromRgb(63, 63, 70));
+                    themeDict["MenuBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(45, 45, 48));
+                    themeDict["StatusBarBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(0, 122, 204));
+                }
+                else
+                {
+                    // Light theme colors
+                    themeDict["WindowBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(255, 255, 255));
+                    themeDict["ControlBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(246, 246, 246));
+                    themeDict["TextForegroundBrush"] = new SolidColorBrush(Color.FromRgb(0, 0, 0));
+                    themeDict["BorderBrush"] = new SolidColorBrush(Color.FromRgb(229, 229, 229));
+                    themeDict["MenuBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(246, 246, 246));
+                    themeDict["StatusBarBackgroundBrush"] = new SolidColorBrush(Color.FromRgb(0, 122, 204));
+                }
+
+                Application.Current.Resources.MergedDictionaries.Add(themeDict);
+                StatusText = $"{themeName} theme applied";
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"Error applying {themeName} theme: {ex.Message}");
+            }
         }
 
         #endregion
