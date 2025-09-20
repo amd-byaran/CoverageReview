@@ -1,0 +1,30 @@
+# Test SSH config file for CoverageAnalyzer
+
+# Global settings
+User testuser
+Port 22
+PubkeyAuthentication yes
+PasswordAuthentication yes
+
+# Host-specific configuration for atlvscode0003
+Host atlvscode0003
+    HostName atlvscode0003.amd.com
+    User byaran
+    IdentityFile ~/.ssh/id_rsa
+    IdentityFile ~/.ssh/id_ed25519
+    Port 22
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+
+# Another test host
+Host devserver
+    HostName devserver.example.com
+    User developer
+    IdentityFile ~/.ssh/dev_key
+    Port 2222
+
+# Wildcard host for all *.amd.com hosts
+Host *.amd.com
+    User amduser
+    IdentityFile ~/.ssh/amd_key
+    Port 22

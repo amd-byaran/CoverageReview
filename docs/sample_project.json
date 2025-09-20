@@ -1,0 +1,22 @@
+{
+  "projectName": "GPU_Coverage_Demo",
+  "projectFolderPath": "C:\\CoverageProjects\\GPU_Coverage_Demo",
+  "selectedDatabaseProject": {
+    "id": 1,
+    "name": "gpu_verification_project",
+    "description": "Main GPU verification project"
+  },
+  "selectedRelease": {
+    "id": 5,
+    "name": "v2.1.0_release",
+    "projectId": 1,
+    "createdAt": "2025-09-16T12:00:00Z"
+  },
+  "coverageType": "functional",
+  "selectedChangelist": "12345678",
+  "reportPath": "/remote/reports/gpu_verification_project/v2.1.0_release/functional/12345678",
+  "createdAt": "2025-09-16T17:30:00Z",
+  "lastModified": "2025-09-16T17:30:00Z",
+  "sshHost": "coverage-server.amd.com",
+  "sshUsername": "coverage_user"
+}
