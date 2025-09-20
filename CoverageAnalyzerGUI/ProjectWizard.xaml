@@ -126,41 +126,15 @@
                         </StackPanel>
                     </StackPanel>
                     
-                    <!-- Report and SSH -->
+                    <!-- Report Name -->
                     <StackPanel Grid.Column="1" Margin="10,0,0,0">
                         <StackPanel Name="ReportSelectionPanel" Margin="0,0,0,10">
                             <TextBlock Text="Report:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
                             <ComboBox Name="ReportComboBox" Style="{StaticResource WizardComboStyle}"
                                      SelectionChanged="ReportComboBox_SelectionChanged"/>
                         </StackPanel>
-                        
-                        <!-- SSH Host - Always Editable -->
-                        <TextBlock Text="SSH Host:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
-                        <TextBox Name="SshHostTextBox" Padding="6,4" Height="28"
-                                Background="{DynamicResource WindowBackgroundBrush}"
-                                BorderBrush="{DynamicResource BorderBrush}"
-                                Text="atlvscode0003"
-                                TextChanged="SshConfig_Changed"/>
-                        
-                        <!-- SSH Config Panel kept for future SSH configuration options -->
-                        <StackPanel Name="SshConfigPanel" IsEnabled="False" Visibility="Collapsed">
-                        </StackPanel>
                     </StackPanel>
                 </Grid>
-
-                <!-- Progress Section (Initially Hidden) -->
-                <Border Name="ProgressPanel" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1" 
-                        Background="{DynamicResource ControlBackgroundBrush}" Padding="15" Margin="0,0,0,15"
-                        Visibility="Collapsed">
-                    <StackPanel>
-                        <TextBlock Text="Copying Files..." Style="{StaticResource StepHeaderStyle}"/>
-                        <ProgressBar Name="CopyProgressBar" Height="20" Margin="0,10" 
-                                    Background="{DynamicResource WindowBackgroundBrush}"
-                                    Foreground="{DynamicResource AccentBrush}"/>
-                        <TextBlock Name="ProgressStatusText" Text="Preparing to copy files..." 
-                                  TextAlignment="Center" Margin="0,5"/>
-                    </StackPanel>
-                </Border>
 
 
             </StackPanel>

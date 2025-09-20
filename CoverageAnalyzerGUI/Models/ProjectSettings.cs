@@ -39,8 +39,7 @@ public class ProjectSettings
     [JsonProperty("lastModified")]
     public DateTime LastModified { get; set; } = DateTime.Now;
 
-    [JsonProperty("sshHost")]
-    public string SshHost { get; set; } = string.Empty;
+
 
     /// <summary>
     /// Full local data path for internal use
@@ -122,8 +121,7 @@ public class ProjectSettings
                !string.IsNullOrEmpty(ProjectFolderPath) &&
                SelectedRelease != null &&
                SelectedReport != null &&
-               !string.IsNullOrEmpty(SelectedChangelist) &&
-               !string.IsNullOrEmpty(ReportPath);
+               !string.IsNullOrEmpty(SelectedChangelist);
     }
 
     /// <summary>

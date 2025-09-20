@@ -1,7 +1,5 @@
 using CoverageAnalyzerGUI.Models;
-using CoverageAnalyzerGUI.Utilities;
 using Microsoft.Win32;
-using Renci.SshNet;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -33,9 +31,6 @@ public partial class ProjectWizard : Window
         _mainWindow = mainWindow;
         InitializeComponent();
         _projectSettings = new ProjectSettings();
-        
-        // Initialize SSH host from the default value in the TextBox
-        _projectSettings.SshHost = SshHostTextBox?.Text ?? string.Empty;
         
         UpdateUIState();
         
@@ -1351,15 +1346,9 @@ public partial class ProjectWizard : Window
         }
     }
 
-    private void SshConfig_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_projectSettings == null) return;
-        
-        _projectSettings.SshHost = SshHostTextBox?.Text ?? string.Empty;
-        UpdateUIState();
-    }
 
-    private async void CreateProjectButton_Click(object sender, RoutedEventArgs e)
+
+    private void CreateProjectButton_Click(object sender, RoutedEventArgs e)
     {
         if (!_projectSettings.IsValid())
         {
@@ -1370,16 +1359,13 @@ public partial class ProjectWizard : Window
 
         try
         {
-            // Show progress panel
-            ProgressPanel.Visibility = Visibility.Visible;
             CreateProjectButton.IsEnabled = false;
             CancelButton.IsEnabled = false;
 
             // Save project settings
             _projectSettings.Save();
-
-            // Copy files via SSH
-            await CopyFilesViaSsh();
+            LogToOutput($"Project created successfully: {_projectSettings.ProjectName}");
+            LogToOutput($"Project saved to: {_projectSettings.ProjectFolderPath}");
 
             CompletedProject = _projectSettings;
             DialogResult = true;
@@ -1390,282 +1376,12 @@ public partial class ProjectWizard : Window
             MessageBox.Show($"Error creating project: {ex.Message}", "Project Creation Error", 
                           MessageBoxButton.OK, MessageBoxImage.Error);
             
-            ProgressPanel.Visibility = Visibility.Collapsed;
             CreateProjectButton.IsEnabled = true;
             CancelButton.IsEnabled = true;
         }
     }
 
-    private async Task CopyFilesViaSsh()
-    {
-        if (string.IsNullOrEmpty(_projectSettings.SshHost) || 
-            string.IsNullOrEmpty(_projectSettings.ReportPath))
-        {
-            throw new InvalidOperationException("SSH host or report path is incomplete");
-        }
 
-        var progress = new Progress<(int filesProcessed, int totalFiles, string currentFile)>(report =>
-        {
-            Dispatcher.Invoke(() =>
-            {
-                if (report.totalFiles > 0)
-                {
-                    CopyProgressBar.Value = (double)report.filesProcessed / report.totalFiles * 100;
-                    ProgressStatusText.Text = $"Copying {report.currentFile} ({report.filesProcessed}/{report.totalFiles})";
-                }
-                else
-                {
-                    ProgressStatusText.Text = "Connecting to SSH server...";
-                }
-            });
-        });
-
-        await Task.Run(() =>
-        {
-            try
-            {
-                LogToOutput($"=== SSH FILE COPY OPERATION ===");
-                LogToOutput($"SSH Host: {_projectSettings.SshHost}");
-                LogToOutput($"Remote Path: {_projectSettings.ReportPath}");
-                LogToOutput($"Local Destination: {_projectSettings.LocalDataPath}");
-                LogToOutput($"NOTE: SSH credentials are never saved - using SSH config files and interactive dialog only");
-                
-                ((IProgress<(int, int, string)>)progress).Report((0, 0, "Reading SSH configuration..."));
-                
-                // Get SSH configuration for the host
-                var sshConfig = SshConfigParser.GetHostConfig(_projectSettings.SshHost);
-                if (sshConfig != null)
-                {
-                    LogToOutput($"SSH Config found - User: {sshConfig.User}, Identity files: {sshConfig.IdentityFiles.Count}");
-                }
-                else
-                {
-                    LogToOutput("No SSH config found, using defaults");
-                    sshConfig = new SshHostConfig
-                    {
-                        HostName = _projectSettings.SshHost,
-                        User = Environment.UserName,
-                        IdentityFiles = SshConfigParser.GetIdentityFiles(_projectSettings.SshHost)
-                    };
-                }
-                
-                ((IProgress<(int, int, string)>)progress).Report((0, 0, "Connecting to SSH server..."));
-                
-                // Try SSH key authentication first
-                SshClient? sshClient = null;
-                SftpClient? sftpClient = null;
-                string? username = null;
-                string? password = null;
-                bool usedSshKeys = false;
-                
-                // Try SSH keys first
-                if (sshConfig.IdentityFiles.Count > 0)
-                {
-                    LogToOutput($"Attempting SSH key authentication with {sshConfig.IdentityFiles.Count} identity files...");
-                    
-                    foreach (var keyPath in sshConfig.IdentityFiles)
-                    {
-                        try
-                        {
-                            LogToOutput($"Trying SSH key: {keyPath}");
-                            if (!File.Exists(keyPath))
-                            {
-                                LogToOutput($"Key file not found: {keyPath}");
-                                continue;
-                            }
-                            
-                            var keyFile = new PrivateKeyFile(keyPath);
-                            var keyFiles = new[] { keyFile };
-                            
-                            // Use username from SSH config or default
-                            username = sshConfig.User ?? Environment.UserName;
-                            
-                            sshClient = new SshClient(_projectSettings.SshHost, username, keyFiles);
-                            sshClient.Connect();
-                            
-                            if (sshClient.IsConnected)
-                            {
-                                LogToOutput($"SSH key authentication successful with {keyPath}");
-                                usedSshKeys = true;
-                                break;
-                            }
-                        }
-                        catch (Exception keyEx)
-                        {
-                            LogToOutput($"SSH key authentication failed with {keyPath}: {keyEx.Message}");
-                            sshClient?.Dispose();
-                            sshClient = null;
-                        }
-                    }
-                }
-                else
-                {
-                    LogToOutput("No SSH keys found in configuration");
-                }
-                
-                // Fallback to password authentication if keys failed
-                if (sshClient == null || !sshClient.IsConnected)
-                {
-                    LogToOutput("SSH key authentication failed, prompting for credentials...");
-                    
-                    // Show credentials dialog on UI thread
-                    bool credentialsProvided = false;
-                    Dispatcher.Invoke(() =>
-                    {
-                        var (success, dialogUsername, dialogPassword) = SshCredentialsDialog.GetCredentials(
-                            this, _projectSettings.SshHost, sshConfig?.User);
-                        
-                        if (success)
-                        {
-                            username = dialogUsername;
-                            password = dialogPassword;
-                            credentialsProvided = true;
-                        }
-                    });
-                    
-                    if (!credentialsProvided || string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
-                    {
-                        throw new OperationCanceledException("SSH authentication was cancelled by user or credentials not provided");
-                    }
-                    
-                    LogToOutput($"Using password authentication for user: {username}");
-                    sshClient = new SshClient(_projectSettings.SshHost, username, password);
-                    sshClient.Connect();
-                    LogToOutput("SSH password authentication successful");
-                }
-                
-                LogToOutput($"SSH connection established using {(usedSshKeys ? "SSH keys" : "password")} for user: {username}");
-                
-                ((IProgress<(int, int, string)>)progress).Report((0, 0, "Listing remote files..."));
-                
-                // List all *.* files in the remote path
-                // Use -P to avoid following symlinks that could cause loops, but resolve the path first
-                var resolveCommand = $"readlink -f '{_projectSettings.ReportPath}'";
-                var resolveResult = sshClient.RunCommand(resolveCommand);
-                
-                string searchPath;
-                if (resolveResult.ExitStatus == 0 && !string.IsNullOrWhiteSpace(resolveResult.Result))
-                {
-                    searchPath = resolveResult.Result.Trim();
-                    LogToOutput($"Resolved symlink: {_projectSettings.ReportPath} -> {searchPath}");
-                }
-                else
-                {
-                    searchPath = _projectSettings.ReportPath;
-                    LogToOutput($"Using original path (not a symlink): {searchPath}");
-                }
-                
-                LogToOutput($"DEBUG: Searching for .* files in: {searchPath}");
-                var listCommand = $"find '{searchPath}' -name '*.*' -type f";
-                LogToOutput($"Executing command: {listCommand}");
-                
-                var result = sshClient.RunCommand(listCommand);
-                if (result.ExitStatus != 0)
-                {
-                    throw new InvalidOperationException($"Failed to list files: {result.Error}");
-                }
-                
-                var txtFiles = result.Result.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-                LogToOutput($"Found {txtFiles.Length} .* files: [{string.Join(", ", txtFiles.Take(5))}]");
-                
-                if (txtFiles.Length == 0)
-                {
-                    LogToOutput("No .* files found in remote path");
-                    LogToOutput($"DEBUG: Let's check if the directory exists and what files are actually there...");
-                    
-                    // Check if directory exists and list all files for debugging
-                    var debugListCmd = $"ls -la '{searchPath}'";
-                    var debugResult = sshClient.RunCommand(debugListCmd);
-                    LogToOutput($"Directory listing result: {debugResult.Result}");
-                    
-                    ((IProgress<(int, int, string)>)progress).Report((0, 0, "No .* files found"));
-                    return;
-                }
-                
-                // Create SFTP connection using the same authentication method
-                if (usedSshKeys)
-                {
-                    // Find the key that worked
-                    foreach (var keyPath in sshConfig.IdentityFiles)
-                    {
-                        try
-                        {
-                            if (File.Exists(keyPath))
-                            {
-                                var keyFile = new PrivateKeyFile(keyPath);
-                                var keyFiles = new[] { keyFile };
-                                sftpClient = new SftpClient(_projectSettings.SshHost, username!, keyFiles);
-                                sftpClient.Connect();
-                                if (sftpClient.IsConnected)
-                                {
-                                    break;
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            sftpClient?.Dispose();
-                            sftpClient = null;
-                        }
-                    }
-                }
-                else
-                {
-                    sftpClient = new SftpClient(_projectSettings.SshHost, username!, password!);
-                    sftpClient.Connect();
-                }
-                
-                if (sftpClient == null || !sftpClient.IsConnected)
-                {
-                    throw new InvalidOperationException("Failed to establish SFTP connection");
-                }
-                
-                LogToOutput("SFTP connection established");
-                
-                // Copy each file
-                for (int i = 0; i < txtFiles.Length; i++)
-                {
-                    var remoteFile = txtFiles[i].Trim();
-                    if (string.IsNullOrEmpty(remoteFile)) continue;
-                    
-                    var fileName = Path.GetFileName(remoteFile);
-                    var localFilePath = Path.Combine(_projectSettings.LocalDataPath, fileName);
-                    
-                    LogToOutput($"Copying: {remoteFile} -> {localFilePath}");
-                    ((IProgress<(int, int, string)>)progress).Report((i, txtFiles.Length, fileName));
-                    
-                    try
-                    {
-                        using var localFileStream = File.Create(localFilePath);
-                        sftpClient.DownloadFile(remoteFile, localFileStream);
-                        LogToOutput($"Successfully copied: {fileName}");
-                    }
-                    catch (Exception fileEx)
-                    {
-                        LogToOutput($"Error copying {fileName}: {fileEx.Message}");
-                        // Continue with other files
-                    }
-                }
-                
-                // Clean up connections
-                sftpClient?.Disconnect();
-                sftpClient?.Dispose();
-                sshClient?.Disconnect();
-                sshClient?.Dispose();
-                
-                ((IProgress<(int, int, string)>)progress).Report((txtFiles.Length, txtFiles.Length, "Copy complete"));
-                LogToOutput($"=== SSH COPY OPERATION COMPLETED ===");
-            }
-            catch (Exception ex)
-            {
-                LogToOutput($"SSH Copy Error: {ex.Message}");
-                LogToOutput($"SSH Copy Stack Trace: {ex.StackTrace}");
-                
-                // SSH operation failed - let the error propagate
-                throw;
-            }
-        });
-    }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1688,9 +1404,6 @@ public partial class ProjectWizard : Window
         // Step 5: Changelist selection enabled when report is selected
         ChangelistSelectionPanel.IsEnabled = _projectSettings.SelectedReport != null;
 
-        // Step 6: SSH config enabled when changelist is selected
-        SshConfigPanel.IsEnabled = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
-
         // Enable Create Project button only when all required fields are completed
         // Note: ProjectName is now auto-generated, so we just check if it exists
         var hasProjectName = !string.IsNullOrEmpty(_projectSettings.ProjectName);
@@ -1698,12 +1411,11 @@ public partial class ProjectWizard : Window
         var hasRelease = _projectSettings.SelectedRelease != null;
         var hasReport = _projectSettings.SelectedReport != null;
         var hasChangelist = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
-        var hasSshHost = !string.IsNullOrEmpty(_projectSettings.SshHost);
         
         // Debug validation
-        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}, SshHost: {hasSshHost}");
+        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}");
         
-        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist && hasSshHost;
+        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist;
         LogToOutput($"Create Project Button Enabled: {CreateProjectButton.IsEnabled}");
     }
 
