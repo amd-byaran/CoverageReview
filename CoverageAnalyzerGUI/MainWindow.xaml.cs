@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -51,6 +52,7 @@ public class HierarchyNode
 public partial class MainWindow : Window
 {
     private ProjectSettings? _currentProject;
+    private HttpClient? _authenticatedHttpClient;
     
     // Project information for display in status bar
     public string ReleaseName { get; private set; } = string.Empty;
@@ -564,6 +566,96 @@ public partial class MainWindow : Window
         {
             Title = "Coverage Analyzer - No Project";
         }
+    }
+
+    /// <summary>
+    /// Sets the authenticated HTTP client for file access
+    /// </summary>
+    public void SetHttpAuthentication(HttpClient httpClient)
+    {
+        // Dispose existing client if any
+        _authenticatedHttpClient?.Dispose();
+        _authenticatedHttpClient = httpClient;
+        AddToOutput("HTTP authentication configured for file access");
+    }
+
+    /// <summary>
+    /// Gets the authenticated HTTP client for file access
+    /// </summary>
+    public HttpClient? GetHttpClient() => _authenticatedHttpClient;
+
+    /// <summary>
+    /// Clears the stored HTTP authentication
+    /// </summary>
+    public void ClearHttpAuthentication()
+    {
+        _authenticatedHttpClient?.Dispose();
+        _authenticatedHttpClient = null;
+        AddToOutput("HTTP authentication cleared");
+    }
+
+    /// <summary>
+    /// Downloads a file using the stored HTTP authentication
+    /// </summary>
+    public async Task<byte[]?> DownloadFileAsync(string url)
+    {
+        if (_authenticatedHttpClient == null)
+        {
+            throw new InvalidOperationException("No HTTP authentication configured. Please authenticate first.");
+        }
+
+        try
+        {
+            AddToOutput($"Downloading file from: {url}");
+            var response = await _authenticatedHttpClient.GetAsync(url);
+            
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsByteArrayAsync();
+                AddToOutput($"Successfully downloaded {content.Length} bytes");
+                return content;
+            }
+            else
+            {
+                AddToOutput($"HTTP download failed: {response.StatusCode} - {response.ReasonPhrase}");
+                return null;
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error downloading file: {ex.Message}");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Downloads a file and saves it to a local path
+    /// </summary>
+    public async Task<bool> DownloadFileToPathAsync(string url, string localPath)
+    {
+        try
+        {
+            var content = await DownloadFileAsync(url);
+            if (content != null)
+            {
+                await File.WriteAllBytesAsync(localPath, content);
+                AddToOutput($"File saved to: {localPath}");
+                return true;
+            }
+            return false;
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error saving file to {localPath}: {ex.Message}");
+            return false;
+        }
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        // Clean up HTTP client
+        _authenticatedHttpClient?.Dispose();
+        base.OnClosed(e);
     }
 
     private void Exit_Click(object sender, RoutedEventArgs e) => Application.Current.Shutdown();

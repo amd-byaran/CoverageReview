@@ -124,6 +124,15 @@
                             <ComboBox Name="ChangelistComboBox" Style="{StaticResource WizardComboStyle}"
                                      SelectionChanged="ChangelistComboBox_SelectionChanged"/>
                         </StackPanel>
+                        
+                        <!-- HTTP Server Configuration -->
+                        <StackPanel Name="HttpServerPanel" Margin="0,0,0,10">
+                            <TextBlock Text="HTTP Server URL:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
+                            <TextBox Name="HttpServerTextBox" Style="{StaticResource WizardTextBoxStyle}"
+                                     Text="http://example.com/coverage"
+                                     TextChanged="HttpServerTextBox_Changed"
+                                     ToolTip="Base URL for HTTP file access (e.g., http://server.com/coverage)"/>
+                        </StackPanel>
                     </StackPanel>
                     
                     <!-- Report Name -->

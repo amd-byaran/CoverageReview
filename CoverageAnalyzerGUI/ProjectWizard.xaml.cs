@@ -32,6 +32,9 @@ public partial class ProjectWizard : Window
         InitializeComponent();
         _projectSettings = new ProjectSettings();
         
+        // Initialize HTTP server URL from the default value in the TextBox
+        _projectSettings.HttpServerUrl = HttpServerTextBox?.Text ?? string.Empty;
+        
         UpdateUIState();
         
         // Auto-connect to database after window is loaded
@@ -1348,7 +1351,7 @@ public partial class ProjectWizard : Window
 
 
 
-    private void CreateProjectButton_Click(object sender, RoutedEventArgs e)
+    private async void CreateProjectButton_Click(object sender, RoutedEventArgs e)
     {
         if (!_projectSettings.IsValid())
         {
@@ -1362,10 +1365,63 @@ public partial class ProjectWizard : Window
             CreateProjectButton.IsEnabled = false;
             CancelButton.IsEnabled = false;
 
+            // Show HTTP authentication dialog if we have a server URL
+            if (!string.IsNullOrEmpty(_projectSettings.HttpServerUrl))
+            {
+                LogToOutput($"Requesting HTTP authentication for: {_projectSettings.HttpServerUrl}");
+                
+                var (success, httpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(
+                    this, _projectSettings.HttpServerUrl);
+                
+                if (!success || httpClient == null)
+                {
+                    LogToOutput("HTTP authentication was cancelled or failed");
+                    CreateProjectButton.IsEnabled = true;
+                    CancelButton.IsEnabled = true;
+                    return;
+                }
+                
+                // Store the authenticated HTTP client in the main window
+                if (_mainWindow != null && rememberCredentials)
+                {
+                    _mainWindow.SetHttpAuthentication(httpClient);
+                    LogToOutput("HTTP authentication stored in main application");
+                }
+                else
+                {
+                    // Clean up if not storing
+                    httpClient.Dispose();
+                    LogToOutput("HTTP authentication not stored (session only)");
+                }
+            }
+
             // Save project settings
             _projectSettings.Save();
             LogToOutput($"Project created successfully: {_projectSettings.ProjectName}");
             LogToOutput($"Project saved to: {_projectSettings.ProjectFolderPath}");
+
+            // Optionally download files if we have both server URL and report path
+            if (!string.IsNullOrEmpty(_projectSettings.HttpServerUrl) && 
+                !string.IsNullOrEmpty(_projectSettings.ReportPath))
+            {
+                try
+                {
+                    LogToOutput("Attempting to download files via HTTP...");
+                    await DownloadFilesViaHttp();
+                    LogToOutput("File download completed successfully");
+                }
+                catch (Exception downloadEx)
+                {
+                    LogToOutput($"File download failed: {downloadEx.Message}");
+                    // Don't fail project creation if download fails
+                    MessageBox.Show($"Project created successfully, but file download failed: {downloadEx.Message}", 
+                                  "Download Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            else
+            {
+                LogToOutput("Skipping file download - no report path configured");
+            }
 
             CompletedProject = _projectSettings;
             DialogResult = true;
@@ -1382,6 +1438,79 @@ public partial class ProjectWizard : Window
     }
 
 
+
+    private void HttpServerTextBox_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (_projectSettings == null) return;
+        
+        _projectSettings.HttpServerUrl = HttpServerTextBox?.Text ?? string.Empty;
+        UpdateUIState();
+    }
+
+    /// <summary>
+    /// Downloads files via HTTP using the authenticated client from MainWindow
+    /// </summary>
+    private async Task DownloadFilesViaHttp()
+    {
+        if (_mainWindow == null)
+        {
+            throw new InvalidOperationException("MainWindow reference is required for HTTP file access");
+        }
+
+        var httpClient = _mainWindow.GetHttpClient();
+        if (httpClient == null)
+        {
+            throw new InvalidOperationException("No HTTP authentication available. Please authenticate first.");
+        }
+
+        if (string.IsNullOrEmpty(_projectSettings.HttpServerUrl) || 
+            string.IsNullOrEmpty(_projectSettings.ReportPath))
+        {
+            throw new InvalidOperationException("HTTP server URL or report path is incomplete");
+        }
+
+        LogToOutput($"=== HTTP FILE DOWNLOAD OPERATION ===");
+        LogToOutput($"HTTP Server: {_projectSettings.HttpServerUrl}");
+        LogToOutput($"Report Path: {_projectSettings.ReportPath}");
+        LogToOutput($"Local Destination: {_projectSettings.LocalDataPath}");
+
+        try
+        {
+            // Construct the full URL to the report file
+            var baseUrl = _projectSettings.HttpServerUrl.TrimEnd('/');
+            var reportPath = _projectSettings.ReportPath.TrimStart('/');
+            var fullUrl = $"{baseUrl}/{reportPath}";
+
+            LogToOutput($"Downloading from URL: {fullUrl}");
+
+            // Get the filename from the report path
+            var fileName = Path.GetFileName(_projectSettings.ReportPath);
+            if (string.IsNullOrEmpty(fileName))
+            {
+                fileName = "coverage_report.html.gz"; // Default filename
+            }
+
+            var localFilePath = Path.Combine(_projectSettings.LocalDataPath, fileName);
+
+            // Use MainWindow's download method
+            var success = await _mainWindow.DownloadFileToPathAsync(fullUrl, localFilePath);
+
+            if (success)
+            {
+                LogToOutput($"Successfully downloaded file to: {localFilePath}");
+                LogToOutput($"=== HTTP DOWNLOAD OPERATION COMPLETED ===");
+            }
+            else
+            {
+                throw new InvalidOperationException("Failed to download file via HTTP");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogToOutput($"HTTP Download Error: {ex.Message}");
+            throw;
+        }
+    }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1404,6 +1533,9 @@ public partial class ProjectWizard : Window
         // Step 5: Changelist selection enabled when report is selected
         ChangelistSelectionPanel.IsEnabled = _projectSettings.SelectedReport != null;
 
+        // Step 6: HTTP Server configuration enabled when changelist is selected
+        HttpServerPanel.IsEnabled = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
+
         // Enable Create Project button only when all required fields are completed
         // Note: ProjectName is now auto-generated, so we just check if it exists
         var hasProjectName = !string.IsNullOrEmpty(_projectSettings.ProjectName);
@@ -1411,11 +1543,12 @@ public partial class ProjectWizard : Window
         var hasRelease = _projectSettings.SelectedRelease != null;
         var hasReport = _projectSettings.SelectedReport != null;
         var hasChangelist = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
+        var hasHttpServer = !string.IsNullOrEmpty(_projectSettings.HttpServerUrl);
         
         // Debug validation
-        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}");
+        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}, HttpServer: {hasHttpServer}");
         
-        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist;
+        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist && hasHttpServer;
         LogToOutput($"Create Project Button Enabled: {CreateProjectButton.IsEnabled}");
     }
 
