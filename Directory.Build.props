@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup>
+    <RestoreAdditionalProjectSources>
+      C:\Users\byaran\OneDrive - Advanced Micro Devices Inc\programming\NugetFeed;
+      $(RestoreAdditionalProjectSources)
+    </RestoreAdditionalProjectSources>
+  </PropertyGroup>
+</Project>

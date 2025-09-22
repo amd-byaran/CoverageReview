@@ -1,9 +1,11 @@
 using CoverageAnalyzerGUI.Models;
+using HvpHtmlParser;
 using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
@@ -28,23 +30,47 @@ public partial class ProjectWizard : Window
 
     public ProjectWizard(MainWindow? mainWindow = null)
     {
-        _mainWindow = mainWindow;
-        InitializeComponent();
-        _projectSettings = new ProjectSettings();
-        
-        // Initialize HTTP server URL from the default value in the TextBox
-        _projectSettings.HttpServerUrl = HttpServerTextBox?.Text ?? string.Empty;
-        
-        UpdateUIState();
-        
-        // Auto-connect to database after window is loaded
-        this.Loaded += ProjectWizard_Loaded;
+        try
+        {
+            LogToOutput("ProjectWizard constructor starting...");
+            _mainWindow = mainWindow;
+            InitializeComponent();
+            _projectSettings = new ProjectSettings();
+            
+            // Initialize Project Data Path from the current report path
+            ProjectDataPathTextBox.Text = _projectSettings.ReportPath ?? string.Empty;
+            
+            UpdateUIState();
+            
+            // Auto-connect to database after window is loaded
+            this.Loaded += ProjectWizard_Loaded;
+            LogToOutput("ProjectWizard constructor completed successfully");
+        }
+        catch (Exception ex)
+        {
+            LogToOutput($"ERROR in ProjectWizard constructor: {ex.Message}");
+            LogToOutput($"Stack trace: {ex.StackTrace}");
+            MessageBox.Show($"Error initializing Project Wizard: {ex.Message}", "Initialization Error", 
+                          MessageBoxButton.OK, MessageBoxImage.Error);
+            throw;
+        }
     }
 
     private async void ProjectWizard_Loaded(object sender, RoutedEventArgs e)
     {
-        // Auto-connect to database on startup
-        await AutoConnectToDatabase();
+        try
+        {
+            LogToOutput("ProjectWizard loaded, attempting database connection...");
+            // Auto-connect to database on startup
+            await AutoConnectToDatabase();
+        }
+        catch (Exception ex)
+        {
+            LogToOutput($"ERROR in ProjectWizard_Loaded: {ex.Message}");
+            LogToOutput($"Database connection failed, but wizard will continue without it");
+            // Don't crash the wizard if database connection fails
+            // The user can still create projects without database connectivity
+        }
     }
 
     private async Task AutoConnectToDatabase()
@@ -52,18 +78,29 @@ public partial class ProjectWizard : Window
         try
         {
             LogToOutput("=== DATABASE CONNECTION ATTEMPT ===");
+            LogToOutput("Checking database connectivity...");
+            
+            // Check if DcPgConn type is available
+            var dcPgConnType = typeof(DcPgConn);
+            LogToOutput($"✅ DcPgConn type found: {dcPgConnType.FullName}");
+            LogToOutput($"✅ Assembly: {dcPgConnType.Assembly.Location}");
             
             // Initialize database connection with timeout
             LogToOutput("Initializing database connection...");
             await Task.Run(() => 
             {
-                var timeout = Task.Delay(10000); // 10 second timeout
-                var initTask = Task.Run(() => DcPgConn.InitDb());
+                var timeout = Task.Delay(15000); // 15 second timeout
+                var initTask = Task.Run(() => 
+                {
+                    LogToOutput("Calling DcPgConn.InitDb()...");
+                    DcPgConn.InitDb();
+                    LogToOutput("DcPgConn.InitDb() completed successfully");
+                });
                 var completedTask = Task.WaitAny(initTask, timeout);
                 
                 if (completedTask == 1) // timeout
                 {
-                    throw new TimeoutException("Database connection timed out after 10 seconds");
+                    throw new TimeoutException("Database connection timed out after 15 seconds");
                 }
             });
             
@@ -79,12 +116,17 @@ public partial class ProjectWizard : Window
                 // Database connected but no releases found
                 _isDatabaseConnected = true;
                 LogToOutput("⚠️ Database connected but no releases found");
+                LogToOutput("This might indicate:");
+                LogToOutput("  - Empty database");
+                LogToOutput("  - Insufficient permissions");
+                LogToOutput("  - Wrong database/schema");
             }
             else
             {
                 // Update UI with success status
                 _isDatabaseConnected = true;
-                LogToOutput($"Connected to database - {_availableReleases.Count} releases available");
+                LogToOutput($"✅ Connected to database - {_availableReleases.Count} releases available");
+                LogToOutput($"Release names: {string.Join(", ", _availableReleases.Take(5).Select(r => r.Name))}");
             }
 
             // Populate releases dropdown
@@ -106,7 +148,31 @@ public partial class ProjectWizard : Window
             {
                 LogToOutput($"❌ Inner exception: {ex.InnerException.Message}");
             }
-            HandleDatabaseError($"Database connection failed: {ex.Message}");
+            LogToOutput($"❌ Stack trace: {ex.StackTrace}");
+            
+            // Provide more specific error handling
+            string errorMessage = ex.Message;
+            if (ex.Message.Contains("connection") || ex.Message.Contains("server"))
+            {
+                errorMessage = "Cannot connect to PostgreSQL server. Please ensure:\n" +
+                              "- PostgreSQL is running\n" +
+                              "- Server address and port are correct\n" +
+                              "- Network connectivity is available";
+            }
+            else if (ex.Message.Contains("authentication") || ex.Message.Contains("password"))
+            {
+                errorMessage = "Database authentication failed. Please check:\n" +
+                              "- Username and password are correct\n" +
+                              "- User has necessary permissions";
+            }
+            else if (ex.Message.Contains("database") && ex.Message.Contains("exist"))
+            {
+                errorMessage = "Database does not exist. Please check:\n" +
+                              "- Database name is correct\n" +
+                              "- Database has been created";
+            }
+            
+            HandleDatabaseError(errorMessage);
         }
     }
 
@@ -119,42 +185,14 @@ public partial class ProjectWizard : Window
         _availableReleases = new List<DatabaseRelease>();
         ReleaseComboBox.ItemsSource = _availableReleases;
 
-        // Add sample data for testing if in debug mode
-        #if DEBUG
-        LogToOutput("🔧 DEBUG MODE: Adding sample data for testing...");
-        AddSampleDataForTesting();
-        #endif
+        // Show the actual database error to the user instead of hiding it with mock data
+        LogToOutput($"❌ Database Error: {errorMessage}");
+        MessageBox.Show($"Database connection failed: {errorMessage}\n\nPlease check:\n- PostgreSQL server is running\n- Database credentials are correct\n- Network connectivity\n- Check the output panel for detailed error messages", 
+                       "Database Connection Error", MessageBoxButton.OK, MessageBoxImage.Warning);
 
         UpdateUIState();
         LogToOutput("=== DATABASE CONNECTION FAILED ===");
     }
-
-    #if DEBUG
-    private void AddSampleDataForTesting()
-    {
-        try
-        {
-            var sampleReleases = new List<DatabaseRelease>
-            {
-                new DatabaseRelease { Id = 1, Name = "Sample Release 1.0", ProjectId = 1, CreatedAt = DateTime.Now.AddDays(-30) },
-                new DatabaseRelease { Id = 2, Name = "Sample Release 1.1", ProjectId = 1, CreatedAt = DateTime.Now.AddDays(-15) },
-                new DatabaseRelease { Id = 3, Name = "Sample Release 2.0", ProjectId = 1, CreatedAt = DateTime.Now.AddDays(-5) }
-            };
-            
-            _availableReleases = sampleReleases;
-            ReleaseComboBox.ItemsSource = _availableReleases;
-            
-            LogToOutput("Using sample data (DEBUG MODE)");
-            
-            LogToOutput("✓ Added sample releases for testing");
-            UpdateUIState();
-        }
-        catch (Exception ex)
-        {
-            LogToOutput($"❌ Failed to add sample data: {ex.Message}");
-        }
-    }
-    #endif
 
     private void BrowseFolderButton_Click(object sender, RoutedEventArgs e)
     {
@@ -249,18 +287,49 @@ public partial class ProjectWizard : Window
     {
         try
         {
-            var releases = DcPgConn.GetAllReleases();
-            return releases.Select((r, index) => new DatabaseRelease 
+            LogToOutput("🔍 Attempting to call DcPgConn.GetAllReleases(100)...");
+            
+            // GetAllReleases expects a nullable int limit parameter
+            var releases = DcPgConn.GetAllReleases(100); // Get up to 100 releases
+            
+            LogToOutput($"✅ DcPgConn.GetAllReleases returned {releases?.Count ?? 0} items");
+            if (releases != null && releases.Count > 0)
+            {
+                LogToOutput($"Sample release item type: {releases[0]?.GetType().FullName}");
+                LogToOutput($"Sample release ToString: {releases[0]?.ToString()}");
+            }
+            
+            if (releases == null)
+            {
+                LogToOutput("⚠️ GetAllReleases returned null");
+                return new List<DatabaseRelease>();
+            }
+            
+            var result = releases.Select((r, index) => new DatabaseRelease 
             { 
                 Id = GetReleaseId(r) ?? (index + 1),
                 Name = GetReleaseName(r) ?? $"Release {index + 1}",
                 ProjectId = 0, // No longer needed since we're not filtering by project
                 CreatedAt = DateTime.Now.AddDays(-index)
             }).ToList();
+            
+            LogToOutput($"✅ Converted to {result.Count} DatabaseRelease objects");
+            if (result.Count > 0)
+            {
+                LogToOutput($"Sample converted release: ID={result[0].Id}, Name='{result[0].Name}'");
+            }
+            
+            return result;
         }
         catch (Exception ex)
         {
-            LogToOutput($"Database GetAllReleases failed: {ex.Message}");
+            LogToOutput($"❌ Database GetAllReleases failed: {ex.Message}");
+            LogToOutput($"❌ Exception type: {ex.GetType().FullName}");
+            LogToOutput($"❌ Stack trace: {ex.StackTrace}");
+            if (ex.InnerException != null)
+            {
+                LogToOutput($"❌ Inner exception: {ex.InnerException.Message}");
+            }
             // Return empty list when database is not available
             return new List<DatabaseRelease>();
         }
@@ -393,15 +462,26 @@ public partial class ProjectWizard : Window
             {
                 _availableReports = await GetReportsFromDatabaseAsync(_projectSettings.SelectedRelease.Id);
                 
-                // Update the UI on the UI thread
-                Dispatcher.Invoke(() =>
+                // Update the UI safely
+                if (Dispatcher.CheckAccess())
                 {
                     if (ReportComboBox != null)
                     {
                         ReportComboBox.ItemsSource = _availableReports;
                         ReportComboBox.SelectedIndex = -1;
                     }
-                });
+                }
+                else
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (ReportComboBox != null)
+                        {
+                            ReportComboBox.ItemsSource = _availableReports;
+                            ReportComboBox.SelectedIndex = -1;
+                        }
+                    });
+                }
             }
             catch (Exception ex)
             {
@@ -623,18 +703,26 @@ public partial class ProjectWizard : Window
             LogToOutput($"Found {_availableChangelists.Count} changelists for {_projectSettings.SelectedReport.Name}");
 
             // Update the UI on the UI thread
-            Dispatcher.Invoke(() =>
+            if (Dispatcher.CheckAccess())
             {
+                // Already on UI thread - execute directly
                 if (ChangelistComboBox != null)
                 {
                     ChangelistComboBox.ItemsSource = _availableChangelists;
                     ChangelistComboBox.SelectedIndex = -1;
                 }
-                else
+            }
+            else
+            {
+                Dispatcher.Invoke(() =>
                 {
-                    LogToOutput("Error: ChangelistComboBox not found");
-                }
-            });
+                    if (ChangelistComboBox != null)
+                    {
+                        ChangelistComboBox.ItemsSource = _availableChangelists;
+                        ChangelistComboBox.SelectedIndex = -1;
+                    }
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -1329,6 +1417,12 @@ public partial class ProjectWizard : Window
                     _projectSettings.SelectedRelease.Name,
                     GetDisplayCoverageType(),
                     selectedChangelist);
+                    
+                // Add the logviewer prefix to the path
+                if (!string.IsNullOrEmpty(_projectSettings.ReportPath))
+                {
+                    _projectSettings.ReportPath =  _projectSettings.ReportPath;
+                }
             }
             catch (Exception ex)
             {
@@ -1339,6 +1433,12 @@ public partial class ProjectWizard : Window
                     _projectSettings.SelectedRelease.Name,
                     GetDisplayCoverageType(),
                     selectedChangelist);
+                    
+                // Add the logviewer prefix to the fallback path
+                if (!string.IsNullOrEmpty(_projectSettings.ReportPath))
+                {
+                    _projectSettings.ReportPath =  _projectSettings.ReportPath;
+                }
             }
 
             LogToOutput($"Generated path: '{_projectSettings.ReportPath}'");
@@ -1351,7 +1451,7 @@ public partial class ProjectWizard : Window
 
 
 
-    private async void CreateProjectButton_Click(object sender, RoutedEventArgs e)
+    private void CreateProjectButton_Click(object sender, RoutedEventArgs e)
     {
         if (!_projectSettings.IsValid())
         {
@@ -1365,13 +1465,16 @@ public partial class ProjectWizard : Window
             CreateProjectButton.IsEnabled = false;
             CancelButton.IsEnabled = false;
 
-            // Show HTTP authentication dialog if we have a server URL
-            if (!string.IsNullOrEmpty(_projectSettings.HttpServerUrl))
+            // Show HTTP authentication dialog if we have a report path with server URL
+            string serverUrl = string.Empty;
+            if (!string.IsNullOrEmpty(_projectSettings.ReportPath) && 
+                _projectSettings.ReportPath.StartsWith("https://logviewer-atl.amd.com"))
             {
-                LogToOutput($"Requesting HTTP authentication for: {_projectSettings.HttpServerUrl}");
+                serverUrl = "https://logviewer-atl.amd.com";
+                LogToOutput($"Requesting HTTP authentication for: {serverUrl}");
                 
                 var (success, httpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(
-                    this, _projectSettings.HttpServerUrl);
+                    this, serverUrl);
                 
                 if (!success || httpClient == null)
                 {
@@ -1395,33 +1498,32 @@ public partial class ProjectWizard : Window
                 }
             }
 
+            // Set HvpTop and ProjectTestDef parameters for main app
+            if (_projectSettings.SelectedReport != null && _projectSettings.CoverageType == CoverageType.Functional)
+            {
+                var reportName = _projectSettings.SelectedReport.Name;
+                var reportNameWithoutVerifPlan = reportName.EndsWith("_verif_plan") 
+                    ? reportName.Substring(0, reportName.Length - "_verif_plan".Length) 
+                    : reportName;
+                
+                // Store the report name without verif_plan suffix for tree display
+                _projectSettings.ReportNameWithoutVerifPlan = reportNameWithoutVerifPlan;
+                
+                // hvp_top = {report_path}/hvp.{report_name_without_verif_plan}.html.gz (corrected format)
+                _projectSettings.HvpTop = $"{_projectSettings.ReportPath}/hvp.{reportNameWithoutVerifPlan}.html.gz";
+                
+                // projectTestDef = {project_path}/tests.html.gz
+                _projectSettings.ProjectTestDef = $"{_projectSettings.ReportPath}/tests.html.gz";
+                
+                LogToOutput($"Set ReportNameWithoutVerifPlan: {_projectSettings.ReportNameWithoutVerifPlan}");
+                LogToOutput($"Set HvpTop: {_projectSettings.HvpTop}");
+                LogToOutput($"Set ProjectTestDef: {_projectSettings.ProjectTestDef}");
+            }
+
             // Save project settings
             _projectSettings.Save();
             LogToOutput($"Project created successfully: {_projectSettings.ProjectName}");
             LogToOutput($"Project saved to: {_projectSettings.ProjectFolderPath}");
-
-            // Optionally download files if we have both server URL and report path
-            if (!string.IsNullOrEmpty(_projectSettings.HttpServerUrl) && 
-                !string.IsNullOrEmpty(_projectSettings.ReportPath))
-            {
-                try
-                {
-                    LogToOutput("Attempting to download files via HTTP...");
-                    await DownloadFilesViaHttp();
-                    LogToOutput("File download completed successfully");
-                }
-                catch (Exception downloadEx)
-                {
-                    LogToOutput($"File download failed: {downloadEx.Message}");
-                    // Don't fail project creation if download fails
-                    MessageBox.Show($"Project created successfully, but file download failed: {downloadEx.Message}", 
-                                  "Download Warning", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            }
-            else
-            {
-                LogToOutput("Skipping file download - no report path configured");
-            }
 
             CompletedProject = _projectSettings;
             DialogResult = true;
@@ -1438,79 +1540,6 @@ public partial class ProjectWizard : Window
     }
 
 
-
-    private void HttpServerTextBox_Changed(object sender, TextChangedEventArgs e)
-    {
-        if (_projectSettings == null) return;
-        
-        _projectSettings.HttpServerUrl = HttpServerTextBox?.Text ?? string.Empty;
-        UpdateUIState();
-    }
-
-    /// <summary>
-    /// Downloads files via HTTP using the authenticated client from MainWindow
-    /// </summary>
-    private async Task DownloadFilesViaHttp()
-    {
-        if (_mainWindow == null)
-        {
-            throw new InvalidOperationException("MainWindow reference is required for HTTP file access");
-        }
-
-        var httpClient = _mainWindow.GetHttpClient();
-        if (httpClient == null)
-        {
-            throw new InvalidOperationException("No HTTP authentication available. Please authenticate first.");
-        }
-
-        if (string.IsNullOrEmpty(_projectSettings.HttpServerUrl) || 
-            string.IsNullOrEmpty(_projectSettings.ReportPath))
-        {
-            throw new InvalidOperationException("HTTP server URL or report path is incomplete");
-        }
-
-        LogToOutput($"=== HTTP FILE DOWNLOAD OPERATION ===");
-        LogToOutput($"HTTP Server: {_projectSettings.HttpServerUrl}");
-        LogToOutput($"Report Path: {_projectSettings.ReportPath}");
-        LogToOutput($"Local Destination: {_projectSettings.LocalDataPath}");
-
-        try
-        {
-            // Construct the full URL to the report file
-            var baseUrl = _projectSettings.HttpServerUrl.TrimEnd('/');
-            var reportPath = _projectSettings.ReportPath.TrimStart('/');
-            var fullUrl = $"{baseUrl}/{reportPath}";
-
-            LogToOutput($"Downloading from URL: {fullUrl}");
-
-            // Get the filename from the report path
-            var fileName = Path.GetFileName(_projectSettings.ReportPath);
-            if (string.IsNullOrEmpty(fileName))
-            {
-                fileName = "coverage_report.html.gz"; // Default filename
-            }
-
-            var localFilePath = Path.Combine(_projectSettings.LocalDataPath, fileName);
-
-            // Use MainWindow's download method
-            var success = await _mainWindow.DownloadFileToPathAsync(fullUrl, localFilePath);
-
-            if (success)
-            {
-                LogToOutput($"Successfully downloaded file to: {localFilePath}");
-                LogToOutput($"=== HTTP DOWNLOAD OPERATION COMPLETED ===");
-            }
-            else
-            {
-                throw new InvalidOperationException("Failed to download file via HTTP");
-            }
-        }
-        catch (Exception ex)
-        {
-            LogToOutput($"HTTP Download Error: {ex.Message}");
-            throw;
-        }
-    }
 
     private void CancelButton_Click(object sender, RoutedEventArgs e)
     {
@@ -1533,8 +1562,14 @@ public partial class ProjectWizard : Window
         // Step 5: Changelist selection enabled when report is selected
         ChangelistSelectionPanel.IsEnabled = _projectSettings.SelectedReport != null;
 
-        // Step 6: HTTP Server configuration enabled when changelist is selected
-        HttpServerPanel.IsEnabled = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
+        // Step 6: Project Data Path display enabled when changelist is selected
+        ProjectDataPathPanel.IsEnabled = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
+        
+        // Update the Project Data Path display when UI state changes
+        if (!string.IsNullOrEmpty(_projectSettings.ReportPath))
+        {
+            ProjectDataPathTextBox.Text = _projectSettings.ReportPath;
+        }
 
         // Enable Create Project button only when all required fields are completed
         // Note: ProjectName is now auto-generated, so we just check if it exists
@@ -1543,12 +1578,12 @@ public partial class ProjectWizard : Window
         var hasRelease = _projectSettings.SelectedRelease != null;
         var hasReport = _projectSettings.SelectedReport != null;
         var hasChangelist = !string.IsNullOrEmpty(_projectSettings.SelectedChangelist);
-        var hasHttpServer = !string.IsNullOrEmpty(_projectSettings.HttpServerUrl);
+        var hasReportPath = !string.IsNullOrEmpty(_projectSettings.ReportPath);
         
         // Debug validation
-        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}, HttpServer: {hasHttpServer}");
+        LogToOutput($"Validation - ProjectName: {hasProjectName} ('{_projectSettings.ProjectName}'), ProjectFolder: {hasProjectFolder}, Release: {hasRelease}, Report: {hasReport}, Changelist: {hasChangelist}, ReportPath: {hasReportPath}");
         
-        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist && hasHttpServer;
+        CreateProjectButton.IsEnabled = hasProjectName && hasProjectFolder && hasRelease && hasReport && hasChangelist && hasReportPath;
         LogToOutput($"Create Project Button Enabled: {CreateProjectButton.IsEnabled}");
     }
 
@@ -1572,14 +1607,26 @@ public partial class ProjectWizard : Window
         // Write to MainWindow's output panel if available
         try
         {
-            _mainWindow?.Dispatcher.Invoke(() =>
+            if (_mainWindow != null && _mainWindow.Dispatcher != null)
             {
-                _mainWindow?.AddToOutput(logMessage);
-            });
+                if (_mainWindow.Dispatcher.CheckAccess())
+                {
+                    // Already on UI thread
+                    _mainWindow?.AddToOutput(logMessage);
+                }
+                else
+                {
+                    _mainWindow.Dispatcher.Invoke(() =>
+                    {
+                        _mainWindow?.AddToOutput(logMessage);
+                    });
+                }
+            }
         }
-        catch
+        catch (Exception ex)
         {
             // MainWindow not available yet, just use console
+            Console.WriteLine($"Failed to log to MainWindow: {ex.Message}");
         }
     }
 }

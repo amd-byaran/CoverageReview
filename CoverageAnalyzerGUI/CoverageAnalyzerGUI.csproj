@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>WinExe</OutputType>
+    <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -17,28 +17,12 @@
     <None Include="hierarchy.txt">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
-    <!-- Copy DatabaseReader.dll and dependencies to output directory -->
-    <None Include="lib\DatabaseReader.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="lib\DatabaseReader.deps.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Include="lib\DatabaseReader.pdb">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Reference to DatabaseReader.dll -->
-    <Reference Include="DatabaseReader">
-      <HintPath>lib\DatabaseReader.dll</HintPath>
-      <Private>True</Private>
-      <CopyLocal>True</CopyLocal>
-    </Reference>
-  </ItemGroup>
-
-  <ItemGroup>
+    <!-- Local NuGet packages -->
+    <PackageReference Include="AMD.DatabaseReader" Version="1.0.1" />
+    <PackageReference Include="HvpHtmlParser" Version="1.0.7" />
     <!-- NuGet packages required by DatabaseReader -->
     <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />

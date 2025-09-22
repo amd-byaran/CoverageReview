@@ -44,6 +44,14 @@
             <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}"/>
             <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
         </Style>
+        
+        <Style TargetType="TextBox" x:Key="WizardTextBoxStyle">
+            <Setter Property="Margin" Value="0,0,0,10"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Setter Property="Background" Value="{DynamicResource WindowBackgroundBrush}"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
     </Window.Resources>
 
     <Grid Background="{DynamicResource WindowBackgroundBrush}">
@@ -106,42 +114,48 @@
 
                 <!-- Database Selections -->
                 <Grid Margin="0,0,0,15">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
                     
-                    <!-- Release and Changelist -->
-                    <StackPanel Grid.Column="0" Margin="0,0,10,0">
-                        <StackPanel Name="ReleaseSelectionPanel" Margin="0,0,0,10">
+                    <!-- Release, Report, and Changelist in one row -->
+                    <Grid Grid.Row="0" Margin="0,0,0,15">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        
+                        <!-- Release -->
+                        <StackPanel Grid.Column="0" Name="ReleaseSelectionPanel" Margin="0,0,10,0">
                             <TextBlock Text="Release:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
                             <ComboBox Name="ReleaseComboBox" Style="{StaticResource WizardComboStyle}"
                                      SelectionChanged="ReleaseComboBox_SelectionChanged"/>
                         </StackPanel>
                         
-                        <StackPanel Name="ChangelistSelectionPanel" Margin="0,0,0,10">
-                            <TextBlock Text="Changelist:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
-                            <ComboBox Name="ChangelistComboBox" Style="{StaticResource WizardComboStyle}"
-                                     SelectionChanged="ChangelistComboBox_SelectionChanged"/>
-                        </StackPanel>
-                        
-                        <!-- HTTP Server Configuration -->
-                        <StackPanel Name="HttpServerPanel" Margin="0,0,0,10">
-                            <TextBlock Text="HTTP Server URL:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
-                            <TextBox Name="HttpServerTextBox" Style="{StaticResource WizardTextBoxStyle}"
-                                     Text="http://example.com/coverage"
-                                     TextChanged="HttpServerTextBox_Changed"
-                                     ToolTip="Base URL for HTTP file access (e.g., http://server.com/coverage)"/>
-                        </StackPanel>
-                    </StackPanel>
-                    
-                    <!-- Report Name -->
-                    <StackPanel Grid.Column="1" Margin="10,0,0,0">
-                        <StackPanel Name="ReportSelectionPanel" Margin="0,0,0,10">
+                        <!-- Report -->
+                        <StackPanel Grid.Column="1" Name="ReportSelectionPanel" Margin="5,0,5,0">
                             <TextBlock Text="Report:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
                             <ComboBox Name="ReportComboBox" Style="{StaticResource WizardComboStyle}"
                                      SelectionChanged="ReportComboBox_SelectionChanged"/>
                         </StackPanel>
+                        
+                        <!-- Changelist -->
+                        <StackPanel Grid.Column="2" Name="ChangelistSelectionPanel" Margin="10,0,0,0">
+                            <TextBlock Text="Changelist:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
+                            <ComboBox Name="ChangelistComboBox" Style="{StaticResource WizardComboStyle}"
+                                     SelectionChanged="ChangelistComboBox_SelectionChanged"/>
+                        </StackPanel>
+                    </Grid>
+                    
+                    <!-- Project Data Path Display spanning full width -->
+                    <StackPanel Grid.Row="1" Name="ProjectDataPathPanel" Margin="0,0,0,10">
+                        <TextBlock Text="Project Data Path:" Style="{StaticResource LabelStyle}" Margin="0,0,0,5"/>
+                        <TextBox Name="ProjectDataPathTextBox" Style="{StaticResource WizardTextBoxStyle}"
+                                 IsReadOnly="True"
+                                 Background="#F5F5F5"
+                                 ToolTip="Project data path from database (GetReportPath)"/>
                     </StackPanel>
                 </Grid>
 

@@ -66,6 +66,7 @@
             </MenuItem>
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Coverage Analysis" Click="RunCoverageAnalysis_Click"/>
+                <MenuItem Header="_Reload Project" Click="TestHvpTreeView_Click"/>
                 <MenuItem Header="_Options..." Click="Options_Click"/>
             </MenuItem>
             <MenuItem Header="_Help">
@@ -229,6 +230,10 @@
             <StatusBarItem>
                 <StackPanel Orientation="Horizontal" Margin="20,0,0,0">
                     <TextBlock Name="ProjectInfoText" Text="No project loaded" FontWeight="Bold" Margin="0,0,10,0"/>
+                    <!-- Progress bar for long operations -->
+                    <ProgressBar Name="OperationProgress" Width="200" Height="16" 
+                                Visibility="Collapsed" Margin="10,0,0,0"
+                                IsIndeterminate="True"/>
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">

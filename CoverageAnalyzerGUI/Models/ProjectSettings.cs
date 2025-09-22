@@ -42,6 +42,15 @@ public class ProjectSettings
     [JsonProperty("httpServerUrl")]
     public string HttpServerUrl { get; set; } = string.Empty;
 
+    [JsonProperty("hvpTop")]
+    public string HvpTop { get; set; } = string.Empty;
+
+    [JsonProperty("projectTestDef")]
+    public string ProjectTestDef { get; set; } = string.Empty;
+
+    [JsonProperty("reportNameWithoutVerifPlan")]
+    public string ReportNameWithoutVerifPlan { get; set; } = string.Empty;
+
     /// <summary>
     /// Full local data path for internal use
     /// </summary>
@@ -103,6 +112,20 @@ public class ProjectSettings
             if (settings != null)
             {
                 settings.ProjectFolderPath = projectFolderPath;
+                
+                // Backward compatibility: populate ReportNameWithoutVerifPlan if not set
+                if (string.IsNullOrEmpty(settings.ReportNameWithoutVerifPlan) && 
+                    settings.SelectedReport != null && 
+                    !string.IsNullOrEmpty(settings.SelectedReport.Name))
+                {
+                    var reportName = settings.SelectedReport.Name;
+                    settings.ReportNameWithoutVerifPlan = reportName.EndsWith("_verif_plan") 
+                        ? reportName.Substring(0, reportName.Length - "_verif_plan".Length) 
+                        : reportName;
+                    
+                    // Save the updated settings
+                    settings.Save();
+                }
             }
             
             return settings;
@@ -123,7 +146,7 @@ public class ProjectSettings
                SelectedRelease != null &&
                SelectedReport != null &&
                !string.IsNullOrEmpty(SelectedChangelist) &&
-               !string.IsNullOrEmpty(HttpServerUrl);
+               !string.IsNullOrEmpty(ReportPath);
     }
 
     /// <summary>
