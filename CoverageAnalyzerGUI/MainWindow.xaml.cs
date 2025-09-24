@@ -1411,6 +1411,15 @@ public partial class MainWindow : Window
         if (RequiresHttpAuthentication())
         {
             AddToOutput("Project requires HTTP authentication for HVP access");
+            AddToOutput("💡 Use 'File > Test HVP TreeView' to load HVP data with authentication");
+            
+            // Skip auto-load for URLs that require authentication to avoid errors
+            if (_currentProject.HvpTop?.StartsWith("http") == true && _authenticatedHttpClient == null)
+            {
+                AddToOutput("⚠️ Skipping auto-load - HTTP authentication required but not configured");
+                AddToOutput("   You can manually load HVP data using 'File > Test HVP TreeView'");
+                return;
+            }
         }
         else
         {
@@ -1858,9 +1867,39 @@ public partial class MainWindow : Window
                 StatusText.Text = "Failed to parse HVP data";
             }
         }
+        catch (HttpRequestException ex)
+        {
+            AddToOutput($"❌ Network error during auto-load: {ex.Message}", LogSeverity.ERROR);
+            AddToOutput("This could be due to:", LogSeverity.WARNING);
+            AddToOutput("- VPN connection required but not active", LogSeverity.WARNING);
+            AddToOutput("- Network connectivity issues", LogSeverity.WARNING);
+            AddToOutput("- Server temporarily unavailable", LogSeverity.WARNING);
+            AddToOutput("- Authentication required but not configured", LogSeverity.WARNING);
+            
+            // Specific suggestions for logviewer-atl.amd.com
+            if (_currentProject?.HvpTop?.Contains("logviewer-atl.amd.com") == true)
+            {
+                AddToOutput("", LogSeverity.INFO);
+                AddToOutput("💡 SPECIFIC SUGGESTIONS for logviewer-atl.amd.com:", LogSeverity.INFO);
+                AddToOutput("1. Connect to AMD VPN if not already connected", LogSeverity.INFO);
+                AddToOutput("2. Use 'File > Test HVP TreeView' to manually load with authentication", LogSeverity.INFO);
+                AddToOutput("3. Verify you're on AMD network or VPN", LogSeverity.INFO);
+                AddToOutput("4. Check if you need to refresh your authentication", LogSeverity.INFO);
+            }
+            
+            StatusText.Text = "Network error - use manual load";
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            AddToOutput($"❌ Authentication error during auto-load: {ex.Message}", LogSeverity.ERROR);
+            AddToOutput("Auto-load skipped - authentication required.", LogSeverity.WARNING);
+            AddToOutput("💡 Use 'File > Test HVP TreeView' to manually load with authentication.", LogSeverity.INFO);
+            StatusText.Text = "Authentication required - use manual load";
+        }
         catch (Exception ex)
         {
             AddToOutput($"❌ Auto-load HVP error: {ex.Message}", LogSeverity.ERROR);
+            AddToOutput("💡 Try using 'File > Test HVP TreeView' for manual loading with better error handling.", LogSeverity.INFO);
             StatusText.Text = "Error loading HVP data";
         }
     }
