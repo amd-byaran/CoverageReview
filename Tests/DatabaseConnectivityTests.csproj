@@ -21,7 +21,7 @@
     </PackageReference>
     <!-- Local NuGet packages -->
     <PackageReference Include="AMD.DatabaseReader" Version="1.0.1" />
-    <PackageReference Include="HvpHtmlParser" Version="1.0.3" />
+    <PackageReference Include="HvpHtmlParser" Version="1.1.1" />
   </ItemGroup>
 
 </Project>

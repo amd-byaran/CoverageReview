@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using CoverageAnalyzerGUI.Models;
 using Microsoft.Win32;
 using HvpHtmlParser;
+using Microsoft.Web.WebView2.Wpf;
 
 namespace CoverageAnalyzerGUI;
 
@@ -34,6 +35,7 @@ public class HierarchyNode
 {
     public string Name { get; set; }
     public string FullPath { get; set; }
+    public string? Link { get; set; } // URL/path to the report file for this node
     public double CoveragePercentage { get; set; }
     public int LinesCovered { get; set; }
     public int TotalLines { get; set; }
@@ -62,12 +64,68 @@ public class HierarchyNode
 }
 
 /// <summary>
+/// ViewModel for displaying HvpNode properties in the DataGrid
+/// </summary>
+public class HvpNodePropertyViewModel
+{
+    public string PropertyName { get; set; }
+    public string PropertyValue { get; set; }
+    public Brush BackgroundColor { get; set; }
+    
+    public HvpNodePropertyViewModel(string propertyName, string propertyValue, Brush backgroundColor)
+    {
+        PropertyName = propertyName;
+        PropertyValue = propertyValue;
+        BackgroundColor = backgroundColor;
+    }
+}
+
+/// <summary>
+/// Utility class for creating color spectrum from red to yellow to green
+/// </summary>
+public static class ColorSpectrum
+{
+    /// <summary>
+    /// Creates a color based on percentage (0-100) from red (0%) to yellow (50%) to green (100%)
+    /// </summary>
+    /// <param name="percentage">Percentage value (0-100)</param>
+    /// <returns>SolidColorBrush with appropriate color</returns>
+    public static SolidColorBrush GetColorForPercentage(double percentage)
+    {
+        // Clamp percentage to 0-100 range
+        percentage = Math.Max(0, Math.Min(100, percentage));
+        
+        byte red, green, blue;
+        
+        if (percentage <= 50)
+        {
+            // From red (0%) to yellow (50%)
+            // Red stays at 255, green increases from 0 to 255
+            red = 255;
+            green = (byte)(255 * (percentage / 50.0));
+            blue = 0;
+        }
+        else
+        {
+            // From yellow (50%) to green (100%)
+            // Green stays at 255, red decreases from 255 to 0
+            red = (byte)(255 * ((100 - percentage) / 50.0));
+            green = 255;
+            blue = 0;
+        }
+        
+        return new SolidColorBrush(Color.FromRgb(red, green, blue));
+    }
+}
+
+/// <summary>
 /// Interaction logic for MainWindow.xaml
 /// </summary>
 public partial class MainWindow : Window
 {
     private ProjectSettings? _currentProject;
     private HttpClient? _authenticatedHttpClient;
+    private bool _statsLoaded = false;
     
     // Project information for display in status bar
     public string ReleaseName { get; private set; } = string.Empty;
@@ -80,6 +138,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         
+        // Enable mouse wheel scrolling for TreeView and ScrollViewers
+        SolutionExplorer.PreviewMouseWheel += SolutionExplorer_PreviewMouseWheel;
+        
         try
         {
             LogToFile("=== APPLICATION STARTUP ===");
@@ -88,6 +149,9 @@ public partial class MainWindow : Window
             AddToOutput("Welcome to Coverage Analyzer GUI");
             AddToOutput("Ready to create or open a project");
             UpdateWindowTitle();
+            
+            // Initialize WebView2
+            InitializeWebView();
             
             // Ensure window is visible and activated
             this.Show();
@@ -102,6 +166,694 @@ public partial class MainWindow : Window
         {
             AddToOutput($"Initialization error: {ex.Message}", LogSeverity.ERROR);
             MessageBox.Show($"Initialization error: {ex.Message}", "Startup Error", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    private async void InitializeWebView()
+    {
+        try
+        {
+            // Initialize WebView2 when ready - simplified version
+            if (HvpBrowser != null)
+            {
+                await HvpBrowser.EnsureCoreWebView2Async();
+                
+                // Configure HTTP authentication for WebView2 if we have credentials
+                ConfigureWebViewAuthentication();
+                
+                // Add Basic Authentication handler for automatic credential provision
+                HvpBrowser.CoreWebView2.BasicAuthenticationRequested += CoreWebView2_BasicAuthenticationRequested;
+                
+                // Add navigation state change event handler
+                HvpBrowser.CoreWebView2.HistoryChanged += (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        BackButton.IsEnabled = HvpBrowser.CoreWebView2.CanGoBack;
+                        ForwardButton.IsEnabled = HvpBrowser.CoreWebView2.CanGoForward;
+                    });
+                };
+                
+                // Set initial welcome content instead of loading test HTML
+                string welcomeHtml = @"
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <title>HVP Coverage Browser</title>
+                    <style>
+                        body { 
+                            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+                            margin: 0; padding: 40px; 
+                            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                            color: white; text-align: center; 
+                        }
+                        .container { 
+                            max-width: 600px; margin: 0 auto; 
+                            background: rgba(255,255,255,0.1); 
+                            padding: 30px; border-radius: 15px; 
+                            backdrop-filter: blur(10px);
+                        }
+                        h1 { font-size: 2.5em; margin-bottom: 20px; }
+                        p { font-size: 1.2em; line-height: 1.6; margin-bottom: 20px; }
+                        .steps { text-align: left; margin: 20px 0; }
+                        .step { margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; }
+                    </style>
+                </head>
+                <body>
+                    <div class='container'>
+                        <h1>🌐 HVP Coverage Browser</h1>
+                        <p>Welcome to the HVP Coverage Analysis Tool!</p>
+                        
+                        <div class='steps'>
+                            <div class='step'>
+                                <strong>1. Create or Open Project</strong><br>
+                                Use File → New Project or File → Open Project to get started
+                            </div>
+                            <div class='step'>
+                                <strong>2. Automatic Loading</strong><br>
+                                HVP data and reports will load automatically in this browser
+                            </div>
+                            <div class='step'>
+                                <strong>3. Interactive Navigation</strong><br>
+                                Click tree nodes to navigate to detailed coverage reports
+                            </div>
+                        </div>
+                        
+                        <p><em>Ready to analyze your HVP coverage data! 🚀</em></p>
+                    </div>
+                </body>
+                </html>";
+                
+                HvpBrowser.NavigateToString(welcomeHtml);
+                LogToFile("WebView2 initialized with welcome content");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogToFile($"WebView2 initialization error: {ex.Message}");
+            AddToOutput($"HTML browser initialization error: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Get Windows user credentials with domain stripped from username
+    /// </summary>
+    private (string username, string domain) GetWindowsCredentials()
+    {
+        try
+        {
+            string fullUsername = Environment.UserName;
+            string domain = Environment.UserDomainName;
+            
+            // Strip domain from username if it contains domain\username format
+            string cleanUsername = fullUsername;
+            if (fullUsername.Contains("\\"))
+            {
+                cleanUsername = fullUsername.Split('\\').Last();
+            }
+            else if (fullUsername.Contains("@"))
+            {
+                cleanUsername = fullUsername.Split('@').First();
+            }
+
+            return (cleanUsername, domain);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error getting Windows credentials: {ex.Message}", LogSeverity.ERROR);
+            return (Environment.UserName, "");
+        }
+    }
+    
+    /// <summary>
+    /// Attempts to authenticate using Windows credentials automatically
+    /// </summary>
+    private async Task<(bool success, HttpClient? httpClient)> TryWindowsAuthentication(string serverUrl)
+    {
+        try
+        {
+            // Create HttpClient with Windows integrated authentication
+            // DefaultNetworkCredentials automatically handles domain/username
+            var handler = new HttpClientHandler()
+            {
+                UseDefaultCredentials = true,
+                Credentials = System.Net.CredentialCache.DefaultNetworkCredentials
+            };
+            
+            var httpClient = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(10) // Quick timeout for automatic auth test
+            };
+            
+            // Test the authentication by making a simple request
+            try
+            {
+                var testResponse = await httpClient.GetAsync(serverUrl);
+                
+                if (testResponse.IsSuccessStatusCode || testResponse.StatusCode != System.Net.HttpStatusCode.Unauthorized)
+                {
+                    AddToOutput($"✅ Windows authentication successful for {serverUrl}", LogSeverity.INFO);
+                    httpClient.Timeout = TimeSpan.FromSeconds(30); // Set normal timeout
+                    return (true, httpClient);
+                }
+                else
+                {
+
+                    httpClient.Dispose();
+                    return (false, null);
+                }
+            }
+            catch (HttpRequestException)
+            {
+                httpClient.Dispose();
+                return (false, null);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error in Windows authentication: {ex.Message}", LogSeverity.ERROR);
+            return (false, null);
+        }
+    }
+
+    /// <summary>
+    /// Handle Basic Authentication requests from WebView2 automatically
+    /// </summary>
+    private void CoreWebView2_BasicAuthenticationRequested(object? sender, Microsoft.Web.WebView2.Core.CoreWebView2BasicAuthenticationRequestedEventArgs e)
+    {
+        try
+        {
+            if (_authenticatedHttpClient?.DefaultRequestHeaders.Authorization != null)
+            {
+                var authHeader = _authenticatedHttpClient.DefaultRequestHeaders.Authorization;
+                if (authHeader.Scheme == "Basic" && !string.IsNullOrEmpty(authHeader.Parameter))
+                {
+                    // Decode the base64 credentials to get username and password
+                    var credentialBytes = Convert.FromBase64String(authHeader.Parameter);
+                    var credential = Encoding.UTF8.GetString(credentialBytes);
+                    var parts = credential.Split(':', 2);
+                    
+                    if (parts.Length == 2)
+                    {
+                        var username = parts[0];
+                        var password = parts[1];
+                        
+                        AddToOutput($"🔐 WebView2 auto-authenticating as user: {username}", LogSeverity.INFO);
+                        
+                        // Provide credentials automatically
+                        e.Response.UserName = username;
+                        e.Response.Password = password;
+                        
+                        return;
+                    }
+                }
+            }
+            
+            AddToOutput("❌ No valid credentials available for WebView2 authentication", LogSeverity.WARNING);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling WebView2 authentication: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Configure WebView2 to use the same HTTP authentication as our HttpClient
+    /// </summary>
+    private void ConfigureWebViewAuthentication()
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null && _authenticatedHttpClient?.DefaultRequestHeaders.Authorization != null)
+            {
+                var authHeader = _authenticatedHttpClient.DefaultRequestHeaders.Authorization;
+                if (authHeader.Scheme == "Basic" && !string.IsNullOrEmpty(authHeader.Parameter))
+                {
+                    // Decode the base64 credentials to get username and password
+                    var credentialBytes = Convert.FromBase64String(authHeader.Parameter);
+                    var credential = Encoding.UTF8.GetString(credentialBytes);
+                    var parts = credential.Split(':', 2);
+                    
+                    if (parts.Length == 2)
+                    {
+                        var username = parts[0];
+                        var password = parts[1];
+                        
+                        AddToOutput($"🔐 Configuring WebView2 auto-authentication for user: {username}", LogSeverity.INFO);
+                        
+                        // Set up comprehensive authentication handling
+                        ConfigureWebView2Authentication(username, password, authHeader.Parameter);
+                    }
+                    else
+                    {
+                        AddToOutput("❌ Invalid credential format in Authorization header", LogSeverity.ERROR);
+                    }
+                }
+                else
+                {
+
+                }
+            }
+            else
+            {
+
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error configuring WebView2 authentication: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Configure comprehensive WebView2 authentication using JavaScript injection
+    /// </summary>
+    private void ConfigureWebView2Authentication(string username, string password, string encodedCredentials)
+    {
+        try
+        {
+            var coreWebView2 = HvpBrowser.CoreWebView2;
+            
+            // Use JavaScript injection to handle authentication automatically
+            coreWebView2.DOMContentLoaded += async (sender, args) =>
+            {
+                try
+                {
+                    // Inject comprehensive authentication handling
+                    var script = $@"
+                        (function() {{
+                            // Store credentials for automatic authentication
+                            window._webview2Auth = {{
+                                header: 'Basic {encodedCredentials}',
+                                username: '{username}',
+                                password: '{password}',
+                                enabled: true
+                            }};
+                            
+                            console.log('WebView2: Auth credentials stored for automatic use');
+                            
+                            // Override XMLHttpRequest to add auth headers automatically
+                            const originalOpen = XMLHttpRequest.prototype.open;
+                            XMLHttpRequest.prototype.open = function(method, url, async, user, password) {{
+                                this._method = method;
+                                this._url = url;
+                                return originalOpen.call(this, method, url, async, user, password);
+                            }};
+                            
+                            const originalSend = XMLHttpRequest.prototype.send;
+                            XMLHttpRequest.prototype.send = function(data) {{
+                                if (this._url && (this._url.startsWith('http://') || this._url.startsWith('https://'))) {{
+                                    if (window._webview2Auth && window._webview2Auth.enabled) {{
+                                        this.setRequestHeader('Authorization', window._webview2Auth.header);
+                                        console.log('WebView2: Auto-auth header added to XMLHttpRequest:', this._url);
+                                    }}
+                                }}
+                                return originalSend.call(this, data);
+                            }};
+                            
+                            // Override fetch to add auth headers automatically
+                            const originalFetch = window.fetch;
+                            window.fetch = function(input, init = {{}}) {{
+                                const url = typeof input === 'string' ? input : input.url;
+                                if (url && (url.startsWith('http://') || url.startsWith('https://'))) {{
+                                    if (window._webview2Auth && window._webview2Auth.enabled) {{
+                                        init.headers = init.headers || {{}};
+                                        init.headers['Authorization'] = window._webview2Auth.header;
+                                        console.log('WebView2: Auto-auth header added to fetch:', url);
+                                    }}
+                                }}
+                                return originalFetch.call(this, input, init);
+                            }};
+                            
+                            // Handle authentication dialogs automatically
+                            const handleAuthDialog = function() {{
+                                // Look for authentication forms and auto-fill them
+                                const usernameFields = document.querySelectorAll('input[type=""text""], input[name*=""user""], input[id*=""user""]');
+                                const passwordFields = document.querySelectorAll('input[type=""password""]');
+                                
+                                if (usernameFields.length > 0 && passwordFields.length > 0) {{
+                                    usernameFields[0].value = window._webview2Auth.username;
+                                    passwordFields[0].value = window._webview2Auth.password;
+                                    
+                                    // Try to submit the form
+                                    const form = usernameFields[0].closest('form');
+                                    if (form) {{
+                                        const submitBtn = form.querySelector('button[type=""submit""], input[type=""submit""]');
+                                        if (submitBtn) {{
+                                            console.log('WebView2: Auto-submitting authentication form');
+                                            submitBtn.click();
+                                        }}
+                                    }}
+                                }}
+                            }};
+                            
+                            // Check for auth dialogs on page load and mutations
+                            setTimeout(handleAuthDialog, 100);
+                            
+                            if (typeof MutationObserver !== 'undefined') {{
+                                const observer = new MutationObserver(function(mutations) {{
+                                    mutations.forEach(function(mutation) {{
+                                        if (mutation.addedNodes.length > 0) {{
+                                            setTimeout(handleAuthDialog, 50);
+                                        }}
+                                    }});
+                                }});
+                                
+                                observer.observe(document.body, {{
+                                    childList: true,
+                                    subtree: true
+                                }});
+                            }}
+                            
+                            console.log('WebView2: Comprehensive authentication system initialized');
+                        }})();
+                    ";
+                    
+                    await coreWebView2.ExecuteScriptAsync(script);
+                    AddToOutput("✅ WebView2 auto-authentication system activated", LogSeverity.INFO);
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"Error setting up WebView2 auto-authentication: {ex.Message}", LogSeverity.ERROR);
+                }
+            };
+            
+            // Handle navigation events for logging
+            coreWebView2.NavigationStarting += (sender, args) =>
+            {
+                try
+                {
+                    if (args.Uri.StartsWith("http://") || args.Uri.StartsWith("https://"))
+                    {
+
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"Error in NavigationStarting: {ex.Message}", LogSeverity.ERROR);
+                }
+            };
+            
+            AddToOutput($"✅ WebView2 authentication configured for user: {username}", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error setting up WebView2 authentication: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private void NavigateToHvpReport(string reportPath)
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null && !string.IsNullOrEmpty(reportPath))
+            {
+                var startTime = DateTime.Now;
+                
+                // Update progress
+                StatusText.Text = $"Loading HVP file... 75%";
+                OperationProgress.Value = 75;
+                
+                // Check if it's a relative path and make it absolute if needed
+                if (!Path.IsPathRooted(reportPath))
+                {
+                    reportPath = Path.GetFullPath(reportPath);
+                }
+
+                // Convert to file URI
+                string fileUri = $"file:///{reportPath.Replace('\\', '/')}";
+                
+                // Add navigation completed handler for local files
+                HvpBrowser.CoreWebView2.NavigationCompleted += (sender, args) =>
+                {
+                    var duration = DateTime.Now - startTime;
+                    if (args.IsSuccess)
+                    {
+                        AddToOutput($"✅ HVP file loaded in {duration.TotalSeconds:F1} seconds", LogSeverity.INFO);
+                        Dispatcher.Invoke(() => 
+                        {
+                            StatusText.Text = $"HVP file loaded successfully! 100%";
+                            OperationProgress.Value = 100;
+                            
+                            // Hide progress after showing completion
+                            Task.Delay(2000).ContinueWith(_ => 
+                            {
+                                Dispatcher.Invoke(() => 
+                                {
+                                    OperationProgress.Visibility = Visibility.Collapsed;
+                                    StatusText.Text = "Ready";
+                                });
+                            });
+                        });
+                    }
+                    else
+                    {
+                        AddToOutput($"❌ HVP file loading failed after {duration.TotalSeconds:F1} seconds", LogSeverity.ERROR);
+                        Dispatcher.Invoke(() => 
+                        {
+                            OperationProgress.Visibility = Visibility.Collapsed;
+                            StatusText.Text = "HVP loading failed";
+                        });
+                    }
+                };
+                
+                HvpBrowser.CoreWebView2.Navigate(fileUri);
+                
+                LogToFile($"Navigating WebView to HVP report: {fileUri}");
+                AddToOutput($"Loading HVP report: {Path.GetFileName(reportPath)}");
+            }
+        }
+        catch (Exception ex)
+        {
+            LogToFile($"Error navigating to HVP report: {ex.Message}");
+            AddToOutput($"Error loading HVP report: {ex.Message}", LogSeverity.ERROR);
+            
+            // Hide progress on error
+            OperationProgress.Visibility = Visibility.Collapsed;
+            StatusText.Text = "Error loading HVP";
+        }
+    }
+
+    private void LoadTestReportButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Load the test HTML file
+            var testHtmlPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "test_hvp_report.html");
+            if (File.Exists(testHtmlPath))
+            {
+                NavigateToHvpReport(testHtmlPath);
+                AddToOutput($"🌐 Loaded test HVP report from: {testHtmlPath}");
+            }
+            else
+            {
+                AddToOutput($"❌ Test report not found at: {testHtmlPath}", LogSeverity.ERROR);
+                
+                // Try alternative path
+                var altPath = Path.Combine(Environment.CurrentDirectory, "test_hvp_report.html");
+                if (File.Exists(altPath))
+                {
+                    NavigateToHvpReport(altPath);
+                    AddToOutput($"🌐 Loaded test HVP report from alternative path: {altPath}");
+                }
+                else
+                {
+                    AddToOutput($"❌ Test report also not found at: {altPath}", LogSeverity.ERROR);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error loading test report: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private void BackButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null && HvpBrowser.CoreWebView2.CanGoBack)
+            {
+                HvpBrowser.CoreWebView2.GoBack();
+                AddToOutput("🔙 Navigated back in browser");
+            }
+            else
+            {
+                AddToOutput("⚠ Cannot go back - no previous page", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error navigating back: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private void ForwardButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null && HvpBrowser.CoreWebView2.CanGoForward)
+            {
+                HvpBrowser.CoreWebView2.GoForward();
+                AddToOutput("🔜 Navigated forward in browser");
+            }
+            else
+            {
+                AddToOutput("⚠ Cannot go forward - no next page", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error navigating forward: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private void RefreshButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null)
+            {
+                HvpBrowser.CoreWebView2.Reload();
+                AddToOutput("🔄 Browser refreshed");
+            }
+            else
+            {
+                AddToOutput("⚠ Browser not initialized", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error refreshing browser: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private async Task LoadHvpTopInBrowser()
+    {
+        try
+        {
+            if (_currentProject == null || string.IsNullOrEmpty(_currentProject.HvpTop))
+            {
+                AddToOutput("⚠ No HVPTop path configured for browser navigation", LogSeverity.WARNING);
+                return;
+            }
+
+            // Show progress indicator for HVPTop loading
+            OperationProgress.Visibility = Visibility.Visible;
+            OperationProgress.IsIndeterminate = false;
+            OperationProgress.Value = 10;
+            StatusText.Text = "Initializing HVPTop... 10%";
+
+            // Wait for WebView2 to be ready
+            if (HvpBrowser?.CoreWebView2 == null)
+            {
+                await HvpBrowser?.EnsureCoreWebView2Async()!;
+                OperationProgress.Value = 30;
+                StatusText.Text = "Browser ready... 30%";
+            }
+
+            string hvpTopPath = _currentProject.HvpTop;
+            
+            OperationProgress.Value = 50;
+            StatusText.Text = "Loading HVPTop... 50%";
+            
+            // Handle different URL types
+            if (hvpTopPath.StartsWith("http://") || hvpTopPath.StartsWith("https://"))
+            {
+                // Direct HTTP/HTTPS URL
+                var startTime = DateTime.Now;
+                bool isCompleted = false;
+                
+                // Add DOM content loaded handler for better timing
+                HvpBrowser.CoreWebView2.DOMContentLoaded += (sender, args) =>
+                {
+                    if (!isCompleted)
+                    {
+                        isCompleted = true;
+                        var duration = DateTime.Now - startTime;
+                        Dispatcher.Invoke(() => 
+                        {
+                            AddToOutput($"✅ HVPTop content loaded in {duration.TotalSeconds:F1} seconds", LogSeverity.INFO);
+                            StatusText.Text = "HVPTop loaded! 100%";
+                            OperationProgress.Value = 100;
+                            
+                            // Hide progress after delay
+                            Task.Delay(2000).ContinueWith(_ => 
+                            {
+                                Dispatcher.Invoke(() => 
+                                {
+                                    OperationProgress.Visibility = Visibility.Collapsed;
+                                    StatusText.Text = "Ready";
+                                });
+                            });
+                        });
+                    }
+                };
+                
+                // Add navigation completed handler as fallback
+                HvpBrowser.CoreWebView2.NavigationCompleted += (sender, args) =>
+                {
+                    var duration = DateTime.Now - startTime;
+                    
+                    if (!args.IsSuccess && !isCompleted)
+                    {
+                        isCompleted = true;
+                        Dispatcher.Invoke(() => 
+                        {
+                            AddToOutput($"❌ HVPTop navigation failed after {duration.TotalSeconds:F1} seconds", LogSeverity.ERROR);
+                            AddToOutput($"💡 Note: Page content may still be loading via redirects or JavaScript", LogSeverity.INFO);
+                            StatusText.Text = "HVPTop navigation failed (content may still load)";
+                            
+                            // Don't hide progress immediately on navigation failure - content might still load
+                            OperationProgress.Value = 75;
+                        });
+                    }
+                    else if (args.IsSuccess && duration.TotalSeconds < 0.5)
+                    {
+                        // Very fast navigation usually means redirect or initial load - wait for DOM
+                        Dispatcher.Invoke(() => 
+                        {
+                            StatusText.Text = "HVPTop navigated, waiting for content... 80%";
+                            OperationProgress.Value = 80;
+                        });
+                    }
+                };
+                
+                HvpBrowser.CoreWebView2.Navigate(hvpTopPath);
+                AddToOutput($"🌐 Loading HVPTop from URL: {hvpTopPath}");
+            }
+            else
+            {
+                // Local file path
+                string fullPath = Path.IsPathRooted(hvpTopPath) ? hvpTopPath : Path.GetFullPath(hvpTopPath);
+                
+                if (File.Exists(fullPath))
+                {
+                    string fileUri = $"file:///{fullPath.Replace('\\', '/')}";
+                    HvpBrowser.CoreWebView2.Navigate(fileUri);
+                    AddToOutput($"🌐 Loading HVPTop from file: {fileUri}");
+                }
+                else
+                {
+                    AddToOutput($"❌ HVPTop file not found: {fullPath}", LogSeverity.ERROR);
+                    
+                    // Fallback to test report
+                    var testHtmlPath = Path.Combine(Directory.GetCurrentDirectory(), "..", "test_hvp_report.html");
+                    if (File.Exists(testHtmlPath))
+                    {
+                        NavigateToHvpReport(testHtmlPath);
+                        AddToOutput($"🌐 Fallback: Loaded test report instead: {testHtmlPath}");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error loading HVPTop in browser: {ex.Message}", LogSeverity.ERROR);
+            
+            // Hide progress on error
+            OperationProgress.Visibility = Visibility.Collapsed;
+            StatusText.Text = "Error loading HVPTop";
         }
     }
 
@@ -170,14 +922,16 @@ public partial class MainWindow : Window
     {
         public string Name { get; set; }
         public string Path { get; set; }
+        public string? Link { get; set; }
         public double CoveragePercentage { get; set; }
         public int LinesCovered { get; set; }
         public int TotalLines { get; set; }
 
-        public HierarchyEntry(string name, string path, double coverage, int linesCovered, int totalLines)
+        public HierarchyEntry(string name, string path, double coverage, int linesCovered, int totalLines, string? link = null)
         {
             Name = name;
             Path = path;
+            Link = link;
             CoveragePercentage = coverage;
             LinesCovered = linesCovered;
             TotalLines = totalLines;
@@ -252,6 +1006,7 @@ public partial class MainWindow : Window
                 hierarchyNode.CoveragePercentage = entry.CoveragePercentage;
                 hierarchyNode.LinesCovered = entry.LinesCovered;
                 hierarchyNode.TotalLines = entry.TotalLines;
+                hierarchyNode.Link = entry.Link;
 
                 // Find parent node
                 var parentPath = GetParentPath(entry.Path);
@@ -423,6 +1178,16 @@ public partial class MainWindow : Window
         {
             AddToOutput("HvpTop: Not configured");
         }
+        
+        // Display ReportPath for debugging hyperlink issues
+        if (_currentProject != null && !string.IsNullOrEmpty(_currentProject.ReportPath))
+        {
+            AddToOutput($"ReportPath: {_currentProject.ReportPath}");
+        }
+        else
+        {
+            AddToOutput("ReportPath: Not configured");
+        }
     }
 
     /// <summary>
@@ -488,6 +1253,7 @@ public partial class MainWindow : Window
         if (wizard.ShowDialog() == true && wizard.CompletedProject != null)
         {
             _currentProject = wizard.CompletedProject;
+            _statsLoaded = false; // Reset stats loaded flag for new project
             
             // Auto-set HttpServerUrl based on HvpTop URL
             if (!string.IsNullOrEmpty(_currentProject.HvpTop) && 
@@ -549,6 +1315,25 @@ public partial class MainWindow : Window
             if (projectSettings != null)
             {
                 _currentProject = projectSettings;
+                _statsLoaded = false; // Reset stats loaded flag for loaded project
+                
+                // Debug: Show what ReportPath was loaded from JSON
+
+
+                
+                // Verify ReportPath contains the changelist (it should be correct from JSON)
+                if (!string.IsNullOrEmpty(_currentProject.ReportPath) && 
+                    !string.IsNullOrEmpty(_currentProject.SelectedChangelist))
+                {
+                    if (_currentProject.ReportPath.Contains(_currentProject.SelectedChangelist))
+                    {
+
+                    }
+                    else
+                    {
+                        AddToOutput($"⚠️ ReportPath doesn't contain changelist {_currentProject.SelectedChangelist}", LogSeverity.WARNING);
+                    }
+                }
                 
                 // Auto-set HttpServerUrl based on HvpTop URL if not already set
                 if (string.IsNullOrEmpty(_currentProject.HttpServerUrl) && 
@@ -664,7 +1449,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Prompts for HTTP credentials and creates authentication object for the session
     /// </summary>
-    private void PromptForHttpCredentials()
+    private async Task PromptForHttpCredentials()
     {
         if (_authenticatedHttpClient != null)
         {
@@ -673,7 +1458,7 @@ public partial class MainWindow : Window
         }
 
         AddToOutput($"  User should provide Credentials");
-        AddToOutput("=== PromptForHttpCredentials START ===", LogSeverity.DEBUG);
+
         
         try
         {
@@ -700,21 +1485,16 @@ public partial class MainWindow : Window
                 }
             }
 
-            AddToOutput($"✓ server: {serverUrl}", LogSeverity.DEBUG);
+
             
-            // Use HttpAuthDialog to get authenticated HttpClient - this works!
-            AddToOutput($"✓ Started HTTP authentication for server: {serverUrl}");
+            // Try Windows authentication first
+            AddToOutput($"✓ Attempting Windows authentication for server: {serverUrl}");
             
-            var (success, httpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(this, serverUrl);
-            
-            // Already on UI thread, no need for Dispatcher.Invoke after dialog
-            AddToOutput("✓ Authentication dialog closed", LogSeverity.DEBUG);
-            
-            AddToOutput($"✓ Authentication dialog returned: success={success}", LogSeverity.DEBUG);
+            var (success, httpClient) = await TryWindowsAuthentication(serverUrl);
             
             if (success && httpClient != null)
             {
-                AddToOutput("Authentication successful", LogSeverity.DEBUG);
+                AddToOutput("✓ Windows authentication successful", LogSeverity.INFO);
                 
                 // Store the authenticated HTTP client
                 _authenticatedHttpClient?.Dispose();
@@ -722,29 +1502,59 @@ public partial class MainWindow : Window
                 
                 AddToOutput($"✓ HTTP authentication configured for server: {serverUrl}");
                 
-                if (rememberCredentials)
-                {
-                    AddToOutput("✓ Credentials will be remembered for this session");
-                }
+                // Configure WebView2 to use the same authentication
+                ConfigureWebViewAuthentication();
             }
             else
             {
-                AddToOutput("✓ HTTP authentication cancelled - some features may not work with protected resources");
+                AddToOutput("⚠ Windows authentication failed, showing login dialog", LogSeverity.INFO);
+                
+                // Fallback to manual authentication dialog
+                // Just use the simple Windows username as default (no password extraction needed)
+                string defaultUsername = Environment.UserName ?? "";
+
+                
+                var (dialogSuccess, dialogHttpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(this, serverUrl, defaultUsername);
+                
+
+
+                
+                if (dialogSuccess && dialogHttpClient != null)
+                {
+
+                    
+                    // Store the authenticated HTTP client
+                    _authenticatedHttpClient?.Dispose();
+                    _authenticatedHttpClient = dialogHttpClient;
+                    
+                    AddToOutput($"✓ HTTP authentication configured for server: {serverUrl}");
+                    
+                    // Configure WebView2 to use the same authentication
+                    ConfigureWebViewAuthentication();
+                    
+                    if (rememberCredentials)
+                    {
+                        AddToOutput("✓ Credentials will be remembered for this session");
+                    }
+                }
+                else
+                {
+                    AddToOutput("❌ Authentication cancelled or failed", LogSeverity.ERROR);
+                    return;
+                }
             }
         }
         catch (Exception ex)
         {
             var errorMsg = $"Error configuring HTTP authentication: {ex.Message}";
             AddToOutput(errorMsg, LogSeverity.ERROR);
-            AddToOutput($"EXCEPTION in PromptForHttpCredentials: {ex.Message}", LogSeverity.DEBUG);
-            AddToOutput($"Stack trace: {ex.StackTrace}", LogSeverity.DEBUG);
         }
         finally
         {
-            AddToOutput("=== PromptForHttpCredentials END ===", LogSeverity.DEBUG);
+
         }
         
-        AddToOutput($"✓ PromptForHttpCredentials completed", LogSeverity.DEBUG);
+
     }
 
     private void LoadHierarchyFromProject(string hierarchyFilePath)
@@ -792,6 +1602,9 @@ public partial class MainWindow : Window
         _authenticatedHttpClient?.Dispose();
         _authenticatedHttpClient = httpClient;
         AddToOutput("HTTP authentication configured for file access");
+        
+        // Configure WebView2 to use the same authentication
+        ConfigureWebViewAuthentication();
     }
 
     /// <summary>
@@ -924,11 +1737,11 @@ public partial class MainWindow : Window
                     AddToOutput("  Prompting for credentials...");
                     
                     // Prompt for credentials
-                    PromptForHttpCredentials();
+                    await PromptForHttpCredentials();
                     
                     if (_authenticatedHttpClient != null)
                     {
-                        AddToOutput($"✓ HTTP authentication configured", LogSeverity.DEBUG);
+
                     }
                     else
                     {
@@ -939,7 +1752,7 @@ public partial class MainWindow : Window
                 }
             }
             
-            AddToOutput("✓ Starting HVP ParseFile operation...", LogSeverity.DEBUG);
+
             
             StatusText.Text = "Loading HVP data...";
             
@@ -949,7 +1762,7 @@ public partial class MainWindow : Window
                 _authenticatedHttpClient.DefaultRequestHeaders.Authorization != null)
             {
                 authCredentials = _authenticatedHttpClient.DefaultRequestHeaders.Authorization.Parameter;
-                AddToOutput("✓ Captured authentication credentials for background thread", LogSeverity.DEBUG);
+
             }
             
             var startTime = DateTime.Now;
@@ -969,7 +1782,26 @@ public partial class MainWindow : Window
                     backgroundReader.SetHttpClient(backgroundHttpClient);
                 }
                 
-                return await backgroundReader.ParseFile(_currentProject.HvpTop);
+                // Suppress console debug output from HvpHtmlParser library
+                var originalOut = Console.Out;
+                var originalError = Console.Error;
+                try
+                {
+                    // Redirect console output to suppress debug messages
+                    using (var nullWriter = new StringWriter())
+                    {
+                        Console.SetOut(nullWriter);
+                        Console.SetError(nullWriter);
+                        
+                        return await backgroundReader.ParseFile(_currentProject.HvpTop);
+                    }
+                }
+                finally
+                {
+                    // Restore original console output
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalError);
+                }
             });
             
             var duration = DateTime.Now - startTime;
@@ -979,7 +1811,6 @@ public partial class MainWindow : Window
             
             if (result != null)
             {
-                AddToOutput($"✓ ParseFile returned: {result.GetType().Name}", LogSeverity.DEBUG);
                 
                 // Convert to tree items and display
                 try 
@@ -1005,6 +1836,9 @@ public partial class MainWindow : Window
                         }
                         
                         StatusText.Text = "HVP data loaded successfully";
+                        
+                        // Navigate WebView2 to HVPTop page after successful load
+                        await LoadHvpTopInBrowser();
                     }
                     else
                     {
@@ -1065,7 +1899,7 @@ public partial class MainWindow : Window
             AddToOutput($"Loading HVP file: {_currentProject.HvpTop}");
             
             // We'll create the HtmlReader inside the background thread to avoid threading issues
-            AddToOutput("✓ Preparing for background ParseFile operation", LogSeverity.DEBUG);
+            // Preparing for background ParseFile operation
             
             // Set authentication if needed for HTTP/HTTPS URLs
             if (_currentProject.HvpTop.StartsWith("http://") || _currentProject.HvpTop.StartsWith("https://"))
@@ -1080,12 +1914,11 @@ public partial class MainWindow : Window
                     AddToOutput("  Prompting for credentials now...");
                     
                     // Prompt for credentials right now
-                    PromptForHttpCredentials();
+                    await PromptForHttpCredentials();
                     
                     if (_authenticatedHttpClient != null)
                     {
-                        AddToOutput($"✓ HTTP authentication configured", LogSeverity.DEBUG);
-                        AddToOutput("✓ HttpClient configured, proceeding to ParseFile", LogSeverity.DEBUG);
+                        // HTTP authentication configured
                     }
                     else
                     {
@@ -1095,16 +1928,16 @@ public partial class MainWindow : Window
                 }
             }
             
-            AddToOutput("✓ About to call HtmlReader.ParseFile...", LogSeverity.DEBUG);
+            // About to call HtmlReader.ParseFile
             
             // Minimal diagnostics - avoid any potential hanging operations
-            AddToOutput($"🌐 Target URL: {_currentProject.HvpTop}", LogSeverity.DEBUG);
+            // Target URL prepared
             
             StatusText.Text = "Connecting to server... (may take up to 2 minutes)";
             
             try
             {
-                AddToOutput("🚀 CALLING ParseFile NOW...", LogSeverity.DEBUG);
+                // Calling ParseFile
                 
                 // Capture authentication credentials for background thread (simplified approach)
                 string? authCredentials = null;
@@ -1112,17 +1945,16 @@ public partial class MainWindow : Window
                     _authenticatedHttpClient.DefaultRequestHeaders.Authorization != null)
                 {
                     authCredentials = _authenticatedHttpClient.DefaultRequestHeaders.Authorization.Parameter;
-                    AddToOutput("✓ Captured authentication credentials for background thread", LogSeverity.DEBUG);
+                    // Authentication credentials captured
                 }
                 else
                 {
-                    AddToOutput("⚠ No authentication available - proceeding without credentials", LogSeverity.DEBUG);
+                    // No authentication available
                 }
                 
                 // Use ConfigureAwait(false) to avoid UI context issues
                 var startTime = DateTime.Now;
-                AddToOutput("⏱️ Starting ParseFile operation...", LogSeverity.INFO);
-                AddToOutput("🚀 Launching background thread for ParseFile...", LogSeverity.DEBUG);
+                // Starting ParseFile operation
                 
                 var result = await Task.Run(async () => {
                     // Create fresh instances for background thread
@@ -1138,22 +1970,41 @@ public partial class MainWindow : Window
                         backgroundReader.SetHttpClient(backgroundHttpClient);
                     }
                     
-                    return await backgroundReader.ParseFile(_currentProject.HvpTop);
+                    // Suppress console debug output from HvpHtmlParser library
+                    var originalOut = Console.Out;
+                    var originalError = Console.Error;
+                    try
+                    {
+                        // Redirect console output to suppress debug messages
+                        using (var nullWriter = new StringWriter())
+                        {
+                            Console.SetOut(nullWriter);
+                            Console.SetError(nullWriter);
+                            
+                            return await backgroundReader.ParseFile(_currentProject.HvpTop);
+                        }
+                    }
+                    finally
+                    {
+                        // Restore original console output
+                        Console.SetOut(originalOut);
+                        Console.SetError(originalError);
+                    }
                 }); // Remove ConfigureAwait(false) to stay on UI thread
                 
-                AddToOutput("🔄 Background thread completed successfully!", LogSeverity.DEBUG);
+                // Background thread completed
                 
                 var duration = DateTime.Now - startTime;
-                AddToOutput($"🎉 ParseFile call COMPLETED successfully in {duration.TotalSeconds:F1} seconds!", LogSeverity.DEBUG);
+                // ParseFile completed successfully
                 
                 // Reset status immediately after successful parse
                 StatusText.Text = "Processing results...";
                 
-                AddToOutput($"✓ ParseFile completed successfully: {result?.GetType().Name ?? "null"}", LogSeverity.DEBUG);
+                // ParseFile result obtained
                 
                 if (result != null)
                 {
-                    AddToOutput($"✓ ParseFile returned: {result.GetType().Name}", LogSeverity.DEBUG);
+                    // ParseFile returned result
                     
                     // Convert to tree items and display - we should be on UI thread after await
                     try 
@@ -1168,7 +2019,7 @@ public partial class MainWindow : Window
                                 // Clear existing items before setting ItemsSource
                                 SolutionExplorer.Items.Clear();
                                 SolutionExplorer.ItemsSource = treeItems;
-                                AddToOutput($"✓ Displayed {treeItems.Count} items in TreeView");
+                                // TreeView populated successfully
                             }
                             else
                             {
@@ -1176,7 +2027,7 @@ public partial class MainWindow : Window
                                     // Clear existing items before setting ItemsSource
                                     SolutionExplorer.Items.Clear();
                                     SolutionExplorer.ItemsSource = treeItems;
-                                    AddToOutput($"✓ Displayed {treeItems.Count} items in TreeView");
+                                    // TreeView populated successfully
                                 });
                             }
                         }
@@ -1301,11 +2152,11 @@ public partial class MainWindow : Window
             // Add debug information about authentication
             if (_authenticatedHttpClient != null)
             {
-                AddToOutput($"Authentication was configured with HttpClient", LogSeverity.DEBUG);
+
             }
             else
             {
-                AddToOutput("No authentication was set", LogSeverity.DEBUG);
+
             }
         }
         finally
@@ -1339,63 +2190,350 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Create a TreeViewItem from an HvpNode with proper hierarchical structure
+    /// Create a TreeViewItem from an HvpNode with proper table row structure
     /// </summary>
     private System.Windows.Controls.TreeViewItem CreateTreeViewItemFromHvpNode(object hvpNode, bool isRoot = false)
     {
         var treeItem = new System.Windows.Controls.TreeViewItem();
         var nodeType = hvpNode.GetType();
         
-        // Get node properties
+        // Get all HvpNode properties
         var nameProperty = nodeType.GetProperty("Name");
         var scoreProperty = nodeType.GetProperty("Score");
+        var groupScoreProperty = nodeType.GetProperty("GroupScore");
+        var groupFractionProperty = nodeType.GetProperty("GroupFraction");
+        var testCountProperty = nodeType.GetProperty("TestCount");
+        var passCountProperty = nodeType.GetProperty("PassCount");
+        var failCountProperty = nodeType.GetProperty("FailCount");
+        var warnCountProperty = nodeType.GetProperty("WarnCount");
+        var assertCountProperty = nodeType.GetProperty("AssertCount");
+        var unknownCountProperty = nodeType.GetProperty("UnknownCount");
         var childrenProperty = nodeType.GetProperty("Children");
+        var linkProperty = nodeType.GetProperty("Link");
+        var urlProperty = nodeType.GetProperty("Url");
+        var reportPathProperty = nodeType.GetProperty("ReportPath");
+        var hyperlinkProperty = nodeType.GetProperty("Hyperlink");
+        var htmlPathProperty = nodeType.GetProperty("HtmlPath");
+        var reportFileProperty = nodeType.GetProperty("ReportFile");
+        var pathProperty = nodeType.GetProperty("Path");
+        var filePathProperty = nodeType.GetProperty("FilePath");
         
-        // Set the header with name and score
+        // Root node analysis removed for performance
+        
+        // Get node values
         string nodeName;
         if (isRoot)
         {
             // For root node: try to use HvpNode name first, fallback to ReportNameWithoutVerifPlan
             var hvpNodeName = nameProperty?.GetValue(hvpNode)?.ToString();
-            AddToOutput($"🐛 ROOT NODE DEBUG: HvpNode name property value = '{hvpNodeName}'", LogSeverity.DEBUG);
-            AddToOutput($"🐛 ROOT NODE DEBUG: ReportNameWithoutVerifPlan = '{_currentProject?.ReportNameWithoutVerifPlan}'", LogSeverity.DEBUG);
             
             if (!string.IsNullOrEmpty(hvpNodeName) && hvpNodeName != "Unknown")
             {
-                // Use the HvpNode's actual name if it exists
                 nodeName = hvpNodeName;
-                AddToOutput($"✓ ROOT NODE: Using HvpNode name = '{nodeName}'", LogSeverity.DEBUG);
             }
             else if (_currentProject != null && !string.IsNullOrEmpty(_currentProject.ReportNameWithoutVerifPlan))
             {
-                // Fallback to the stored report name for the root node
                 nodeName = _currentProject.ReportNameWithoutVerifPlan;
-                AddToOutput($"✓ ROOT NODE: Using ReportNameWithoutVerifPlan = '{nodeName}'", LogSeverity.DEBUG);
             }
             else
             {
-                // Final fallback
                 nodeName = "Coverage Report";
-                AddToOutput($"✓ ROOT NODE: Using final fallback = '{nodeName}'", LogSeverity.DEBUG);
             }
         }
         else
         {
-            // Use the actual node name for child nodes
             nodeName = nameProperty?.GetValue(hvpNode)?.ToString() ?? "Unknown";
         }
         
+        // Get all property values
         var score = scoreProperty?.GetValue(hvpNode);
+        var groupScore = groupScoreProperty?.GetValue(hvpNode);
+        var groupFraction = groupFractionProperty?.GetValue(hvpNode)?.ToString() ?? "";
+        var testCount = testCountProperty?.GetValue(hvpNode);
+        var passCount = passCountProperty?.GetValue(hvpNode);
+        var failCount = failCountProperty?.GetValue(hvpNode);
+        var warnCount = warnCountProperty?.GetValue(hvpNode);
+        var assertCount = assertCountProperty?.GetValue(hvpNode);
+        var unknownCount = unknownCountProperty?.GetValue(hvpNode);
         
-        if (score is double doubleScore && doubleScore > 0)
+        // Score debugging removed for performance
+        
+        // Create table row structure as Header
+        var tableRow = new Grid();
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(184) }); // Name - wider for better readability
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Score - wider for percentages
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });  // GroupScore - wider for percentages
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // TestCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // PassCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // FailCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // WarnCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });  // AssertCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });  // UnknownCount
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Remaining space
+        
+        // Create text blocks for each column
+        var nameText = new TextBlock 
+        { 
+            Text = nodeName, 
+            VerticalAlignment = VerticalAlignment.Center,
+            Padding = new Thickness(4, 2, 4, 2),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(nameText, 0);
+        tableRow.Children.Add(nameText);
+        
+        // Score column with color coding
+        var scoreText = new TextBlock 
+        { 
+            Text = score is double scoreVal ? $"{scoreVal:F1}%" : "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        if (score is double scoreDouble)
         {
-            treeItem.Header = $"{nodeName} ({doubleScore:F1}%)";
-            if (isRoot) AddToOutput($"✓ ROOT NODE FINAL HEADER: '{treeItem.Header}' (with score)", LogSeverity.DEBUG);
+            scoreText.Background = ColorSpectrum.GetColorForPercentage(scoreDouble);
         }
-        else
+        Grid.SetColumn(scoreText, 1);
+        tableRow.Children.Add(scoreText);
+        
+        // GroupScore column with color coding
+        var groupScoreText = new TextBlock 
+        { 
+            Text = groupScore is double groupScoreVal ? $"{groupScoreVal:F1}%" : "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        if (groupScore is double groupScoreDouble)
         {
-            treeItem.Header = nodeName;
-            if (isRoot) AddToOutput($"✓ ROOT NODE FINAL HEADER: '{treeItem.Header}' (no score)", LogSeverity.DEBUG);
+            groupScoreText.Background = ColorSpectrum.GetColorForPercentage(groupScoreDouble);
+        }
+        Grid.SetColumn(groupScoreText, 2);
+        tableRow.Children.Add(groupScoreText);
+        
+        // TestCount column
+        var testCountText = new TextBlock 
+        { 
+            Text = testCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(testCountText, 3);
+        tableRow.Children.Add(testCountText);
+        
+        // PassCount column
+        var passCountText = new TextBlock 
+        { 
+            Text = passCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(passCountText, 4);
+        tableRow.Children.Add(passCountText);
+        
+        // FailCount column
+        var failCountText = new TextBlock 
+        { 
+            Text = failCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(failCountText, 5);
+        tableRow.Children.Add(failCountText);
+        
+        // WarnCount column
+        var warnCountText = new TextBlock 
+        { 
+            Text = warnCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(warnCountText, 6);
+        tableRow.Children.Add(warnCountText);
+        
+        // AssertCount column
+        var assertCountText = new TextBlock 
+        { 
+            Text = assertCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(assertCountText, 7);
+        tableRow.Children.Add(assertCountText);
+        
+        // UnknownCount column
+        var unknownCountText = new TextBlock 
+        { 
+            Text = unknownCount?.ToString() ?? "",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Padding = new Thickness(4, 2, 4, 2),
+            FontFamily = new FontFamily("Consolas"),
+            Foreground = new SolidColorBrush(Colors.Black)
+        };
+        Grid.SetColumn(unknownCountText, 8);
+        tableRow.Children.Add(unknownCountText);
+        
+        // Set the table row as the header
+        treeItem.Header = tableRow;
+        
+        // Store HvpNode reference for selection events
+        treeItem.Tag = hvpNode;
+        
+        // Create HierarchyNode for DataContext to work with new selection handler
+        var hierarchyNode = new HierarchyNode(nodeName, nodeName);
+        hierarchyNode.CoveragePercentage = score is double scoreValue ? scoreValue : 0.0;
+        hierarchyNode.LinesCovered = passCount is int passValue ? passValue : 0;
+        hierarchyNode.TotalLines = testCount is int testValue ? testValue : 0;
+        
+        // Extract link information from HVP node
+        string? nodeLink = null;
+        
+        // Special handling for root node - link to HvpTop main page
+        if (isRoot)
+        {
+            nodeLink = _currentProject?.HvpTop;
+        }
+        // Try different possible link properties in order of preference
+        else if (hyperlinkProperty != null)
+        {
+            nodeLink = hyperlinkProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (htmlPathProperty != null)
+        {
+            nodeLink = htmlPathProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (reportFileProperty != null)
+        {
+            nodeLink = reportFileProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (reportPathProperty != null)
+        {
+            nodeLink = reportPathProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (linkProperty != null)
+        {
+            nodeLink = linkProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (urlProperty != null)
+        {
+            nodeLink = urlProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (pathProperty != null)
+        {
+            nodeLink = pathProperty.GetValue(hvpNode)?.ToString();
+        }
+        else if (filePathProperty != null)
+        {
+            nodeLink = filePathProperty.GetValue(hvpNode)?.ToString();
+        }
+        
+        // Log all link-related properties for debugging
+        if (string.IsNullOrEmpty(nodeLink) && !isRoot)
+        {
+
+            
+            var linkProperties = new[] {
+                ("Hyperlink", hyperlinkProperty),
+                ("HtmlPath", htmlPathProperty), 
+                ("ReportFile", reportFileProperty),
+                ("ReportPath", reportPathProperty),
+                ("Link", linkProperty),
+                ("Url", urlProperty),
+                ("Path", pathProperty),
+                ("FilePath", filePathProperty)
+            };
+            
+            foreach (var (propName, prop) in linkProperties)
+            {
+                if (prop != null)
+                {
+                    try
+                    {
+                        var value = prop.GetValue(hvpNode)?.ToString();
+
+                    }
+                    catch (Exception)
+                    {
+                        // Ignore property access errors
+                    }
+                }
+                else
+                {
+
+                }
+            }
+        }
+        
+        hierarchyNode.Link = nodeLink;
+        treeItem.DataContext = hierarchyNode;
+        
+        // Keep existing selection handler for backward compatibility
+        treeItem.Selected += (sender, e) => {
+            try
+            {
+                if (!string.IsNullOrEmpty(nodeLink))
+                {
+                    AddToOutput($"📋 Selected node: {nodeName} - Loading report: {nodeLink}");
+                    
+                    // Check if it's a relative path that needs ReportPath prefix
+                    string fullPath = nodeLink;
+                    if (_currentProject?.ReportPath != null && !Uri.IsWellFormedUriString(nodeLink, UriKind.Absolute))
+                    {
+                        if (!Path.IsPathRooted(nodeLink))
+                        {
+                            string basePath = Path.GetDirectoryName(_currentProject.ReportPath) ?? "";
+                            fullPath = Path.Combine(basePath, nodeLink);
+                        }
+                    }
+                    
+                    if (File.Exists(fullPath))
+                    {
+                        NavigateToHvpReport(fullPath);
+                    }
+                    else if (Uri.IsWellFormedUriString(fullPath, UriKind.Absolute))
+                    {
+                        NavigateToWebUrl(fullPath);
+                    }
+                    else
+                    {
+                        AddToOutput($"⚠️ Report file not found: {fullPath}", LogSeverity.WARNING);
+                    }
+                }
+                else
+                {
+                    AddToOutput($"📋 Selected node: {nodeName} - No report path available", LogSeverity.WARNING);
+                }
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"Error handling tree selection: {ex.Message}", LogSeverity.ERROR);
+            }
+        };
+        
+        if (isRoot)
+        {
+
         }
         
         // Add children recursively
@@ -1416,5 +2554,704 @@ public partial class MainWindow : Window
         }
         
         return treeItem;
+    }
+
+    /// <summary>
+    /// Synchronize header scroll with tree scroll for table alignment
+    /// </summary>
+    private void TreeScrollViewer_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        try
+        {
+            if (sender is ScrollViewer treeScrollViewer)
+            {
+                // Find the header scroll viewer and synchronize horizontal scroll
+                var headerScrollViewer = FindName("HeaderScrollViewer") as ScrollViewer;
+                if (headerScrollViewer != null)
+                {
+                    headerScrollViewer.ScrollToHorizontalOffset(treeScrollViewer.HorizontalOffset);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error synchronizing scroll: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle mouse wheel events for TreeView to enable smooth scrolling
+    /// </summary>
+    private void SolutionExplorer_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+    {
+        try
+        {
+            // Find the TreeScrollViewer and forward the mouse wheel event to it
+            var treeScrollViewer = FindName("TreeScrollViewer") as ScrollViewer;
+            if (treeScrollViewer != null)
+            {
+                // Calculate scroll amount (3 lines per wheel click is typical)
+                double scrollAmount = -e.Delta / 40.0; // Standard scroll amount
+                
+                // Scroll vertically
+                treeScrollViewer.ScrollToVerticalOffset(treeScrollViewer.VerticalOffset + scrollAmount);
+                
+                // Mark event as handled so it doesn't bubble up
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling mouse wheel: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle TreeView selection changes to navigate to the associated report
+    /// </summary>
+    private void SolutionExplorer_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        try
+        {
+            if (e.NewValue is TreeViewItem treeViewItem && treeViewItem.DataContext is HierarchyNode node)
+            {
+                // Use the node from DataContext if available
+                HandleNodeSelection(node);
+            }
+            else if (e.NewValue is HierarchyNode directNode)
+            {
+                // Direct HierarchyNode selection
+                HandleNodeSelection(directNode);
+            }
+            // Handle legacy TreeViewItem selection for default items
+            else if (e.NewValue is TreeViewItem legacyItem)
+            {
+                AddToOutput($"Selected: {legacyItem.Header}", LogSeverity.INFO);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling tree selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Stats TreeView selection changes
+    /// </summary>
+    private void StatsTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        try
+        {
+            if (e.NewValue is TreeViewItem treeViewItem)
+            {
+                AddToOutput($"📊 Stats selected: {treeViewItem.Header}", LogSeverity.INFO);
+                
+                // Check if the TreeViewItem has a Tag containing the original node data
+                if (treeViewItem.Tag != null)
+                {
+                    HandleStatsNodeSelection(treeViewItem.Tag);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling stats tree selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Handle the selection of a Stats node and navigate to its hyperlink if available
+    /// </summary>
+    private void HandleStatsNodeSelection(object statsNode)
+    {
+        try
+        {
+            var nodeType = statsNode.GetType();
+            var nameProperty = nodeType.GetProperty("Name");
+            var linkProperty = nodeType.GetProperty("Link") ?? nodeType.GetProperty("Hyperlink") ?? nodeType.GetProperty("Href");
+            
+            var nodeName = nameProperty?.GetValue(statsNode)?.ToString() ?? "Unknown";
+            AddToOutput($"📋 Selected stats node: {nodeName}", LogSeverity.INFO);
+            
+            // Show progress indicator for stats navigation
+            OperationProgress.Visibility = Visibility.Visible;
+            OperationProgress.IsIndeterminate = false;
+            OperationProgress.Value = 10;
+            StatusText.Text = "Loading stats report... 10%";
+            
+            if (linkProperty != null)
+            {
+                var linkValue = linkProperty.GetValue(statsNode)?.ToString();
+                
+                if (!string.IsNullOrEmpty(linkValue))
+                {
+                    string reportUrl = linkValue;
+                    
+
+
+
+
+                    
+                    // Check if the link is relative and needs to be combined with ReportPath
+                    if (_currentProject?.ReportPath != null && !Uri.IsWellFormedUriString(reportUrl, UriKind.Absolute))
+                    {
+
+                        
+                        // For web URLs, we need to use URI combination, not Path.Combine
+                        if (_currentProject.ReportPath.StartsWith("http://") || _currentProject.ReportPath.StartsWith("https://"))
+                        {
+                            try
+                            {
+                                // Ensure base path ends with slash to append rather than replace
+                                string basePath = _currentProject.ReportPath;
+                                if (!basePath.EndsWith("/"))
+                                {
+                                    basePath += "/";
+                                }
+
+                                var baseUri = new Uri(basePath);
+                                var combinedUri = new Uri(baseUri, reportUrl);
+                                reportUrl = combinedUri.ToString();
+
+                            }
+                            catch (Exception ex)
+                            {
+                                AddToOutput($"Error combining URIs: {ex.Message}", LogSeverity.ERROR);
+                            }
+                        }
+                        else if (!Path.IsPathRooted(reportUrl))
+                        {
+                            // For local paths, use Path.Combine
+                            string basePath = Path.GetDirectoryName(_currentProject.ReportPath) ?? "";
+                            reportUrl = Path.Combine(basePath, reportUrl);
+
+                        }
+                    }
+                    
+
+                    
+                    // Navigate to the URL or file
+                    if (File.Exists(reportUrl))
+                    {
+                        AddToOutput($"🌐 Loading local stats report: {Path.GetFileName(reportUrl)}", LogSeverity.INFO);
+                        StatusText.Text = $"Loading {Path.GetFileName(reportUrl)}... 50%";
+                        OperationProgress.Value = 50;
+                        NavigateToHvpReport(reportUrl);
+                    }
+                    else if (Uri.IsWellFormedUriString(reportUrl, UriKind.Absolute))
+                    {
+                        AddToOutput($"🌐 Loading web stats report: {reportUrl}", LogSeverity.INFO);
+                        StatusText.Text = "Loading web stats report... 50%";
+                        OperationProgress.Value = 50;
+                        NavigateToWebUrl(reportUrl);
+                    }
+                    else
+                    {
+                        AddToOutput($"⚠️ Stats report file not found: {reportUrl}", LogSeverity.WARNING);
+                        StatusText.Text = "Stats file not found";
+                        OperationProgress.Value = 0;
+                    }
+                }
+                else
+                {
+                    AddToOutput($"ℹ️ No hyperlink available for stats node: {nodeName}", LogSeverity.INFO);
+                    // Hide progress when no navigation occurs
+                    StatusText.Text = "No hyperlink available";
+                    OperationProgress.Visibility = Visibility.Collapsed;
+                }
+            }
+            else
+            {
+                AddToOutput($"ℹ️ No hyperlink property found for stats node: {nodeName}", LogSeverity.INFO);
+                // Hide progress when no navigation occurs
+                StatusText.Text = "No hyperlink property found";
+                OperationProgress.Visibility = Visibility.Collapsed;
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling stats node selection: {ex.Message}", LogSeverity.ERROR);
+            
+            // Hide progress on error
+            StatusText.Text = "Error loading stats";
+            OperationProgress.Visibility = Visibility.Collapsed;
+            StatusText.Text = "Error loading stats report";
+        }
+        finally
+        {
+            // Ensure progress is hidden if no URL was found
+            if (OperationProgress.Visibility == Visibility.Visible && OperationProgress.Value < 50)
+            {
+                Task.Delay(500).ContinueWith(_ => 
+                {
+                    Dispatcher.Invoke(() => 
+                    {
+                        OperationProgress.Visibility = Visibility.Collapsed;
+                        StatusText.Text = "Ready";
+                    });
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Load statistics from stats.html.gz file using HTMLReader
+    /// </summary>
+    private async void LoadStats_Click(object sender, RoutedEventArgs e)
+    {
+        AddToOutput("=== Loading Statistics Data ===\n");
+        
+        // Show progress indicator
+        OperationProgress.Visibility = Visibility.Visible;
+        
+        // Disable button during operation
+        if (sender is Button loadButton)
+        {
+            loadButton.IsEnabled = false;
+        }
+        
+        StatusText.Text = "Loading statistics...";
+        
+        // Show progress indicator with percentage
+        OperationProgress.Visibility = Visibility.Visible;
+        OperationProgress.IsIndeterminate = false;
+        OperationProgress.Value = 0;
+        
+        try
+        {
+            if (_currentProject == null)
+            {
+                AddToOutput("⚠ No project loaded. Please create or open a project first.", LogSeverity.WARNING);
+                return;
+            }
+            
+            if (string.IsNullOrEmpty(_currentProject.ReportPath))
+            {
+                AddToOutput("⚠ No ReportPath configured. Please set ReportPath in project settings.", LogSeverity.WARNING);
+                return;
+            }
+            
+            // Construct stats.html.gz path
+            string statsPath = Path.Combine(_currentProject.ReportPath, "stats.html.gz");
+            
+            AddToOutput($"📊 Looking for stats file: {statsPath}");
+            
+            // Check if it's a local file or URL
+            if (!statsPath.StartsWith("http://") && !statsPath.StartsWith("https://"))
+            {
+                // Local file - check if exists
+                if (!File.Exists(statsPath))
+                {
+                    AddToOutput($"❌ Stats file not found: {statsPath}", LogSeverity.ERROR);
+                    AddToOutput("💡 Make sure the ReportPath is correct and contains stats.html.gz", LogSeverity.INFO);
+                    return;
+                }
+            }
+            
+            // Check if authentication is needed for HTTP URLs and use existing HttpClient
+            HttpClient? httpClient = null;
+            if (statsPath.StartsWith("http://") || statsPath.StartsWith("https://"))
+            {
+                if (_authenticatedHttpClient != null)
+                {
+                    httpClient = _authenticatedHttpClient;
+                    AddToOutput("🔐 Using existing authenticated HTTP client for stats loading");
+                }
+                else
+                {
+                    AddToOutput("⚠️ HTTP URL detected but no authentication configured. Some features may not work.", LogSeverity.WARNING);
+                    AddToOutput("💡 Tip: Use File > Load Coverage Data to set up HTTP authentication first.", LogSeverity.INFO);
+                }
+            }
+            
+            var startTime = DateTime.Now;
+            AddToOutput("⏱️ Starting ParseFile operation for stats...", LogSeverity.INFO);
+            
+            // Update progress status
+            StatusText.Text = "Downloading and parsing stats file...";
+            
+            // Update progress status
+            StatusText.Text = "Downloading and parsing stats file...";
+            
+            var result = await Task.Run(async () => {
+                // Create fresh instances for background thread
+                var backgroundReader = new HtmlReader();
+                
+                // Set up authentication if we have an authenticated HttpClient
+                if (httpClient != null)
+                {
+                    backgroundReader.SetHttpClient(httpClient);
+                }
+                
+                // Suppress console debug output from HvpHtmlParser library
+                var originalOut = Console.Out;
+                var originalError = Console.Error;
+                try
+                {
+                    // Redirect console output to suppress debug messages
+                    using (var nullWriter = new StringWriter())
+                    {
+                        Console.SetOut(nullWriter);
+                        Console.SetError(nullWriter);
+                        
+                        return await backgroundReader.ParseFile(statsPath);
+                    }
+                }
+                finally
+                {
+                    // Restore original console output
+                    Console.SetOut(originalOut);
+                    Console.SetError(originalError);
+                }
+            });
+            
+            var duration = DateTime.Now - startTime;
+            AddToOutput($"🎉 Stats ParseFile completed successfully in {duration.TotalSeconds:F1} seconds!", LogSeverity.INFO);
+            
+            // Update progress status
+            StatusText.Text = "Building stats tree view... 75%";
+            OperationProgress.Value = 75;
+            
+            if (result != null)
+            {
+                
+                // Convert to tree items and display in Stats TreeView
+                try 
+                {
+                    var statsTreeItems = ConvertStatsNodeToTreeItems(result);
+                    
+                    if (statsTreeItems?.Count > 0)
+                    {
+                        // Update StatsTreeView on UI thread - directly add items without extra wrapper
+                        if (Dispatcher.CheckAccess())
+                        {
+                            StatsTreeView.Items.Clear();
+                            
+                            // Add parsed items directly to TreeView (no "Stats" wrapper)
+                            foreach (var item in statsTreeItems)
+                            {
+                                StatsTreeView.Items.Add(item);
+                            }
+                            
+                            AddToOutput($"✓ Loaded {statsTreeItems.Count} stats items in TreeView");
+                        }
+                        else
+                        {
+                            Dispatcher.Invoke(() => {
+                                StatsTreeView.Items.Clear();
+                                
+                                // Add parsed items directly to TreeView (no "Stats" wrapper)
+                                foreach (var item in statsTreeItems)
+                                {
+                                    StatsTreeView.Items.Add(item);
+                                }
+                                
+                                AddToOutput($"✓ Loaded {statsTreeItems.Count} stats items in TreeView");
+                            });
+                        }
+                    }
+                    else
+                    {
+                        AddToOutput("⚠ No stats items found to display", LogSeverity.WARNING);
+                    }
+                    
+                    // Mark stats as loaded if we successfully added items
+                    if (StatsTreeView.Items.Count > 0)
+                    {
+                        _statsLoaded = true;
+                        AddToOutput($"✓ Stats loaded successfully - {StatsTreeView.Items.Count} items", LogSeverity.INFO);
+                    }
+                }
+                catch (Exception uiEx)
+                {
+                    AddToOutput($"❌ UI update error for stats: {uiEx.Message}", LogSeverity.ERROR);
+                }
+            }
+            else
+            {
+                AddToOutput("❌ ParseFile returned null - no stats data parsed", LogSeverity.ERROR);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Error loading stats: {ex.Message}", LogSeverity.ERROR);
+        }
+        finally
+        {
+            // Hide progress indicator
+            OperationProgress.Visibility = Visibility.Collapsed;
+            OperationProgress.IsIndeterminate = true;
+            OperationProgress.Value = 0;
+            
+            // Re-enable button and reset status
+            if (sender is Button senderButton)
+            {
+                senderButton.IsEnabled = true;
+            }
+            StatusText.Text = "Ready";
+        }
+    }
+    
+    /// <summary>
+    /// Handle ExplorerTabControl selection change to auto-load stats if needed
+    /// </summary>
+    private void ExplorerTabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (e.Source == sender && ExplorerTabControl.SelectedItem is TabItem selectedTab)
+        {
+            // Check if Stats tab is selected (look for "Stat" in header)
+            string tabHeader = selectedTab.Header?.ToString() ?? "";
+            if (tabHeader.Contains("Stat", StringComparison.OrdinalIgnoreCase))
+            {
+                OnStatsTabSelected();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handle tab selection change to auto-load stats if needed
+    /// </summary>
+    public void OnStatsTabSelected()
+    {
+        // Auto-load stats if not already loaded and we have a project
+        if (!_statsLoaded && _currentProject != null && !string.IsNullOrEmpty(_currentProject.ReportPath))
+        {
+            AddToOutput("📊 Auto-loading stats on tab switch...", LogSeverity.INFO);
+            LoadStats_Click(this, new RoutedEventArgs());
+        }
+    }
+
+    /// <summary>
+    /// Convert StatsNode to TreeView items, preserving original node names
+    /// </summary>
+    private List<TreeViewItem>? ConvertStatsNodeToTreeItems(object statsNode, int maxDepth = 5, int currentDepth = 0)
+    {
+        if (statsNode == null || currentDepth >= maxDepth)
+            return null;
+            
+        var result = new List<TreeViewItem>();
+        
+        try
+        {
+            var nodeType = statsNode.GetType();
+            
+            // Get common properties
+            var nameProperty = nodeType.GetProperty("Name");
+            var childrenProperty = nodeType.GetProperty("Children");
+            
+            var nodeName = nameProperty?.GetValue(statsNode)?.ToString() ?? "Unknown";
+            
+            // Processing stats node (logging removed for performance)
+            
+            // Create TreeViewItem with original node name and store node data in Tag
+            var treeItem = new TreeViewItem
+            {
+                Header = nodeName,
+                IsExpanded = currentDepth < 2, // Expand first 2 levels
+                Tag = statsNode // Store original node data for hyperlink access
+            };
+            
+            // Process children if they exist
+            if (childrenProperty != null)
+            {
+                var children = childrenProperty.GetValue(statsNode);
+                if (children is System.Collections.IEnumerable enumerable)
+                {
+                    int childCount = 0;
+                    foreach (var child in enumerable)
+                    {
+                        var childItems = ConvertStatsNodeToTreeItems(child, maxDepth, currentDepth + 1);
+                        if (childItems != null)
+                        {
+                            foreach (var childItem in childItems)
+                            {
+                                treeItem.Items.Add(childItem);
+                                childCount++;
+                            }
+                        }
+                    }
+                    
+                    if (childCount > 0)
+                    {
+
+                    }
+                }
+            }
+            
+            result.Add(treeItem);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error processing stats node: {ex.Message}", LogSeverity.ERROR);
+            
+            // Add error item
+            var errorItem = new TreeViewItem
+            {
+                Header = $"Error: {ex.Message}"
+            };
+            result.Add(errorItem);
+        }
+        
+        return result;
+    }
+
+    /// <summary>
+    /// Handle the selection of a HierarchyNode and navigate to its report
+    /// </summary>
+    private void HandleNodeSelection(HierarchyNode node)
+    {
+        try
+        {
+            AddToOutput($"📋 Selected node: {node.Name}", LogSeverity.INFO);
+            
+            // Show progress indicator for navigation
+            OperationProgress.Visibility = Visibility.Visible;
+            OperationProgress.IsIndeterminate = false;
+            OperationProgress.Value = 10;
+            StatusText.Text = "Loading HVP report... 10%";
+
+            if (!string.IsNullOrEmpty(node.Link))
+            {
+                string reportUrl = node.Link;
+                
+
+
+
+
+                
+                // Check if the link is relative and needs to be combined with ReportPath
+                if (_currentProject?.ReportPath != null && !Uri.IsWellFormedUriString(reportUrl, UriKind.Absolute))
+                {
+
+                    
+                    // For web URLs, we need to use URI combination, not Path.Combine
+                    if (_currentProject.ReportPath.StartsWith("http://") || _currentProject.ReportPath.StartsWith("https://"))
+                    {
+                        try
+                        {
+                            // Ensure base path ends with slash to append rather than replace
+                            string basePath = _currentProject.ReportPath;
+                            if (!basePath.EndsWith("/"))
+                            {
+                                basePath += "/";
+                            }
+
+                            var baseUri = new Uri(basePath);
+                            var combinedUri = new Uri(baseUri, reportUrl);
+                            reportUrl = combinedUri.ToString();
+
+                        }
+                        catch (Exception ex)
+                        {
+                            AddToOutput($"Error combining URIs: {ex.Message}", LogSeverity.ERROR);
+                        }
+                    }
+                    else if (!Path.IsPathRooted(reportUrl))
+                    {
+                        // For local paths, use Path.Combine
+                        string basePath = Path.GetDirectoryName(_currentProject.ReportPath) ?? "";
+                        reportUrl = Path.Combine(basePath, reportUrl);
+
+                    }
+                }
+
+                // Ensure we have a valid path
+                if (File.Exists(reportUrl))
+                {
+                    AddToOutput($"🌐 Loading report: {Path.GetFileName(reportUrl)}", LogSeverity.INFO);
+                    StatusText.Text = $"Loading {Path.GetFileName(reportUrl)}... 50%";
+                    OperationProgress.Value = 50;
+                    NavigateToHvpReport(reportUrl);
+                }
+                else if (Uri.IsWellFormedUriString(reportUrl, UriKind.Absolute))
+                {
+                    // It's a web URL, navigate directly
+                    AddToOutput($"🌐 Loading web report: {reportUrl}", LogSeverity.INFO);
+                    StatusText.Text = "Loading web report... 50%";
+                    OperationProgress.Value = 50;
+                    NavigateToWebUrl(reportUrl);
+                }
+                else
+                {
+                    AddToOutput($"⚠️ Report file not found: {reportUrl}", LogSeverity.WARNING);
+                    // Update progress to show file not found
+                    StatusText.Text = "HVP file not found";
+                    OperationProgress.Value = 0;
+                }
+            }
+            else
+            {
+                AddToOutput($"ℹ️ No report link available for: {node.Name}", LogSeverity.INFO);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling node selection: {ex.Message}", LogSeverity.ERROR);
+        }
+        finally
+        {
+            // For errors or when no navigation occurs, hide progress immediately
+            if (string.IsNullOrEmpty(node.Link))
+            {
+                OperationProgress.Visibility = Visibility.Collapsed;
+                StatusText.Text = "Ready";
+            }
+            // Otherwise, let the navigation completion handlers manage progress cleanup
+        }
+    }
+
+    /// <summary>
+    /// Navigate to a web URL in the browser
+    /// </summary>
+    private void NavigateToWebUrl(string url)
+    {
+        try
+        {
+            if (HvpBrowser?.CoreWebView2 != null && !string.IsNullOrEmpty(url))
+            {
+                var startTime = DateTime.Now;
+                AddToOutput($"⏱️ Navigating to: {url}");
+                
+                // Add navigation completed handler for timing and progress
+                HvpBrowser.CoreWebView2.NavigationCompleted += (sender, args) =>
+                {
+                    var duration = DateTime.Now - startTime;
+                    if (args.IsSuccess)
+                    {
+                        AddToOutput($"✅ Navigation completed in {duration.TotalSeconds:F1} seconds", LogSeverity.INFO);
+                        Dispatcher.Invoke(() => 
+                        {
+                            StatusText.Text = $"HVP report loaded successfully! 100%";
+                            OperationProgress.Value = 100;
+                            
+                            // Hide progress after showing completion
+                            Task.Delay(2000).ContinueWith(_ => 
+                            {
+                                Dispatcher.Invoke(() => 
+                                {
+                                    OperationProgress.Visibility = Visibility.Collapsed;
+                                    StatusText.Text = "Ready";
+                                });
+                            });
+                        });
+                    }
+                    else
+                    {
+                        AddToOutput($"❌ Navigation failed after {duration.TotalSeconds:F1} seconds", LogSeverity.ERROR);
+                        Dispatcher.Invoke(() => 
+                        {
+                            OperationProgress.Visibility = Visibility.Collapsed;
+                            StatusText.Text = "Navigation failed";
+                        });
+                    }
+                };
+                
+                HvpBrowser.CoreWebView2.Navigate(url);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error navigating to URL: {ex.Message}", LogSeverity.ERROR);
+        }
     }
 }

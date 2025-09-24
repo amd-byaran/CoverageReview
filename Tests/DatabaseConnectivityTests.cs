@@ -24,23 +24,18 @@ namespace DatabaseConnectivityTests
             var releases = GetAllReleases(3);
             Assert.NotNull(releases);
             
-            Console.WriteLine($"Retrieved {releases.Count} releases from database");
-            
             if (releases.Count > 0)
             {
                 var firstRelease = releases[0];
-                Console.WriteLine($"First release: {firstRelease.ReleaseName} (ID: {firstRelease.ReleaseId})");
                 
                 // Test with functional coverage type
                 var reports = GetAllReportsForRelease(firstRelease.ReleaseId, "func_cov");
                 Assert.NotNull(reports);
                 
-                Console.WriteLine($"Found {reports.Count} functional coverage reports for release {firstRelease.ReleaseName}");
-                
                 if (reports.Count > 0)
                 {
                     var firstReport = reports[0];
-                    Console.WriteLine($"First report: Project='{firstReport.Item3}', Name='{firstReport.Item4}'");
+                    // Report test completed successfully
                 }
             }
         }

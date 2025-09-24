@@ -10,6 +10,14 @@
     <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
     <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <DisableWarnForInvalidRestoreProjects>false</DisableWarnForInvalidRestoreProjects>
+  </PropertyGroup>
+
+  <!-- Suppress version conflict warnings for System.Drawing.Common -->
+  <PropertyGroup>
+    <WarningsAsErrors />
+    <WarningsNotAsErrors />
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -22,14 +30,15 @@
   <ItemGroup>
     <!-- Local NuGet packages -->
     <PackageReference Include="AMD.DatabaseReader" Version="1.0.1" />
-    <PackageReference Include="HvpHtmlParser" Version="1.0.7" />
+    <PackageReference Include="HvpHtmlParser" Version="1.1.2" />
     <!-- NuGet packages required by DatabaseReader -->
     <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
     <!-- Additional packages for project functionality -->
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
-    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2792.45" />
   </ItemGroup>
 
 </Project>

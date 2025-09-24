@@ -7,12 +7,12 @@ Console.WriteLine("⚠️  WARNING: This test requires AMD.DatabaseReader NuGet 
 Console.WriteLine("💡 This is a standalone test file. To run it, create a proper .csproj file with the required dependencies.");
 Console.WriteLine();
 
-#if false // Disabled due to missing dependencies - enable when DcPgConn is available
+#if ENABLE_DATABASE_TESTS // Use project-level conditional compilation
 try
 {
     // Test 1: Load DcPgConn type
     Console.WriteLine("🔍 Test 1: Loading DcPgConn type...");
-    // var dcPgConnType = typeof(DcPgConn); // Commented out - requires AMD.DatabaseReader package
+    var dcPgConnType = typeof(DcPgConn); // Requires AMD.DatabaseReader package
     Console.WriteLine($"✅ DcPgConn type loaded: {dcPgConnType.FullName}");
     Console.WriteLine($"✅ Assembly: {dcPgConnType.Assembly.FullName}");
     Console.WriteLine($"✅ Assembly Location: {dcPgConnType.Assembly.Location}");
@@ -133,7 +133,6 @@ try
     Console.WriteLine("=== Test Complete ===");
     Console.WriteLine("✅ DatabaseReader.dll appears to be properly integrated!");
     Console.WriteLine("⚠️ If database operations failed, you need to configure database connection settings.");
-    
 }
 catch (Exception ex)
 {
@@ -141,5 +140,19 @@ catch (Exception ex)
     Console.WriteLine($"❌ Message: {ex.Message}");
     Console.WriteLine($"❌ Stack trace: {ex.StackTrace}");
     Console.WriteLine();
-    Console.WriteLine("This indicates a serious DLL integration problem.");
+    Console.WriteLine("💡 This error might occur if:");
+    Console.WriteLine("   • AMD.DatabaseReader NuGet package is not installed");
+    Console.WriteLine("   • TempDbReader.dll is not in the correct location");
+    Console.WriteLine("   • Database connection is not properly configured");
+    Console.WriteLine("   • Dependencies like Npgsql or Microsoft.Extensions.Logging are missing");
 }
+#else
+Console.WriteLine("🔒 Database tests are disabled.");
+Console.WriteLine("📝 To enable:");
+Console.WriteLine("   1. Create a .csproj file with PackageReference to AMD.DatabaseReader");
+Console.WriteLine("   2. Add <DefineConstants>ENABLE_DATABASE_TESTS</DefineConstants> to the project");
+Console.WriteLine("   3. Build and run with proper dependencies");
+#endif
+
+Console.WriteLine("\nPress any key to exit...");
+Console.ReadKey();

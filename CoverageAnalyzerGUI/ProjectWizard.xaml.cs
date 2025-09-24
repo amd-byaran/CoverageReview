@@ -32,7 +32,6 @@ public partial class ProjectWizard : Window
     {
         try
         {
-            LogToOutput("ProjectWizard constructor starting...");
             _mainWindow = mainWindow;
             InitializeComponent();
             _projectSettings = new ProjectSettings();
@@ -44,12 +43,9 @@ public partial class ProjectWizard : Window
             
             // Auto-connect to database after window is loaded
             this.Loaded += ProjectWizard_Loaded;
-            LogToOutput("ProjectWizard constructor completed successfully");
         }
         catch (Exception ex)
         {
-            LogToOutput($"ERROR in ProjectWizard constructor: {ex.Message}");
-            LogToOutput($"Stack trace: {ex.StackTrace}");
             MessageBox.Show($"Error initializing Project Wizard: {ex.Message}", "Initialization Error", 
                           MessageBoxButton.OK, MessageBoxImage.Error);
             throw;
@@ -60,14 +56,11 @@ public partial class ProjectWizard : Window
     {
         try
         {
-            LogToOutput("ProjectWizard loaded, attempting database connection...");
             // Auto-connect to database on startup
             await AutoConnectToDatabase();
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            LogToOutput($"ERROR in ProjectWizard_Loaded: {ex.Message}");
-            LogToOutput($"Database connection failed, but wizard will continue without it");
             // Don't crash the wizard if database connection fails
             // The user can still create projects without database connectivity
         }
@@ -1371,6 +1364,84 @@ public partial class ProjectWizard : Window
         }
         return $"/remote/reports/{projectName}/{releaseName}/{coverageType}/{changelist}";
     }
+    
+    private string NormalizeReportPath(string path, string changelist)
+    {
+        try
+        {
+            // If path is already a complete URL, normalize it
+            if (path.StartsWith("http://") || path.StartsWith("https://"))
+            {
+                // Replace backslashes with forward slashes in URLs
+                var normalizedUrl = path.Replace('\\', '/');
+                
+                // Check if changelist is missing from the path and add it
+                if (!string.IsNullOrEmpty(changelist) && !normalizedUrl.Contains($"/{changelist}/"))
+                {
+                    // Find the accumulate part and insert changelist after it
+                    var accumulateIndex = normalizedUrl.IndexOf("/accumulate/");
+                    if (accumulateIndex >= 0)
+                    {
+                        var beforeAccumulate = normalizedUrl.Substring(0, accumulateIndex + "/accumulate/".Length);
+                        var afterAccumulate = normalizedUrl.Substring(accumulateIndex + "/accumulate/".Length);
+                        
+                        // Only add changelist if it's not already there
+                        if (!afterAccumulate.StartsWith(changelist + "/"))
+                        {
+                            normalizedUrl = beforeAccumulate + changelist + "/" + afterAccumulate;
+                        }
+                    }
+                }
+                
+                LogToOutput($"Normalized URL: {normalizedUrl}");
+                return normalizedUrl;
+            }
+            
+            // If it's a relative path, build the complete URL
+            var basePath = path.Replace('\\', '/').TrimStart('/');
+            
+            // Ensure changelist is included in the path
+            if (!string.IsNullOrEmpty(changelist) && !basePath.Contains($"/{changelist}/"))
+            {
+                var accumulateIndex = basePath.IndexOf("/accumulate/");
+                if (accumulateIndex >= 0)
+                {
+                    var beforeAccumulate = basePath.Substring(0, accumulateIndex + "/accumulate/".Length);
+                    var afterAccumulate = basePath.Substring(accumulateIndex + "/accumulate/".Length);
+                    
+                    if (!afterAccumulate.StartsWith(changelist + "/"))
+                    {
+                        basePath = beforeAccumulate + changelist + "/" + afterAccumulate;
+                    }
+                }
+                else
+                {
+                    // If no accumulate found, add changelist to the end of the path structure
+                    var pathParts = basePath.Split('/');
+                    if (pathParts.Length > 0)
+                    {
+                        var lastPart = pathParts[pathParts.Length - 1];
+                        if (!string.IsNullOrEmpty(lastPart) && (lastPart.Contains(".") || lastPart.Contains("html")))
+                        {
+                            // This looks like a filename, insert changelist before it
+                            pathParts[pathParts.Length - 1] = changelist + "/" + lastPart;
+                            basePath = string.Join("/", pathParts);
+                        }
+                    }
+                }
+            }
+            
+            var fullUrl = "https://logviewer-atl.amd.com/" + basePath;
+            LogToOutput($"Constructed URL: {fullUrl}");
+            return fullUrl;
+        }
+        catch (Exception ex)
+        {
+            LogToOutput($"Error normalizing path: {ex.Message}");
+            // Return original path if normalization fails
+            return path;
+        }
+    }
 
     private string GetDisplayCoverageType()
     {
@@ -1400,45 +1471,35 @@ public partial class ProjectWizard : Window
             // Regenerate project name with new changelist
             GenerateProjectName();
             
-            // Try to get the actual report path from database using all available information
-            try
+            // Only update ReportPath if it's not already set correctly in the JSON
+            // The stored JSON should already have the correct path
+            if (string.IsNullOrEmpty(_projectSettings.ReportPath))
             {
-                // Try the new GetReleaseReportInfo method if available, or use existing GetReportPath
-                var dbPath = TryGetReportPathFromDatabase(
-                    _projectSettings.SelectedReport.ProjectName,
-                    _projectSettings.SelectedRelease.Name,
-                    _projectSettings.SelectedReport.Name,
-                    coverageType,
-                    reportType,
-                    selectedChangelist);
-                
-                _projectSettings.ReportPath = dbPath ?? GenerateDisplayPath(
-                    _projectSettings.SelectedReport.ProjectName,
-                    _projectSettings.SelectedRelease.Name,
-                    GetDisplayCoverageType(),
-                    selectedChangelist);
-                    
-                // Add the logviewer prefix to the path
-                if (!string.IsNullOrEmpty(_projectSettings.ReportPath))
+                try
                 {
-                    _projectSettings.ReportPath =  _projectSettings.ReportPath;
+                    // Try to get the actual report path from database using all available information
+                    var dbPath = TryGetReportPathFromDatabase(
+                        _projectSettings.SelectedReport.ProjectName,
+                        _projectSettings.SelectedRelease.Name,
+                        _projectSettings.SelectedReport.Name,
+                        coverageType,
+                        reportType,
+                        selectedChangelist);
+                    
+                    _projectSettings.ReportPath = dbPath ?? GenerateDisplayPath(
+                        _projectSettings.SelectedReport.ProjectName,
+                        _projectSettings.SelectedRelease.Name,
+                        GetDisplayCoverageType(),
+                        selectedChangelist);
+                }
+                catch (Exception ex)
+                {
+                    LogToOutput($"Error getting database path: {ex.Message}");
                 }
             }
-            catch (Exception ex)
+            else
             {
-                LogToOutput($"Error getting database path: {ex.Message}");
-                // Fallback to generated path using all available information
-                _projectSettings.ReportPath = GenerateDisplayPath(
-                    _projectSettings.SelectedReport.ProjectName,
-                    _projectSettings.SelectedRelease.Name,
-                    GetDisplayCoverageType(),
-                    selectedChangelist);
-                    
-                // Add the logviewer prefix to the fallback path
-                if (!string.IsNullOrEmpty(_projectSettings.ReportPath))
-                {
-                    _projectSettings.ReportPath =  _projectSettings.ReportPath;
-                }
+                LogToOutput($"Using existing ReportPath from JSON: {_projectSettings.ReportPath}");
             }
 
             LogToOutput($"Generated path: '{_projectSettings.ReportPath}'");
@@ -1521,6 +1582,8 @@ public partial class ProjectWizard : Window
             }
 
             // Save project settings
+            LogToOutput($"DEBUG: About to save project with ReportPath: {_projectSettings.ReportPath}");
+            LogToOutput($"DEBUG: About to save project with SelectedChangelist: {_projectSettings.SelectedChangelist}");
             _projectSettings.Save();
             LogToOutput($"Project created successfully: {_projectSettings.ProjectName}");
             LogToOutput($"Project saved to: {_projectSettings.ProjectFolderPath}");
@@ -1601,32 +1664,6 @@ public partial class ProjectWizard : Window
 
     private void LogToOutput(string message)
     {
-        var logMessage = $"ProjectWizard: {message}";
-        Console.WriteLine(logMessage);
-        
-        // Write to MainWindow's output panel if available
-        try
-        {
-            if (_mainWindow != null && _mainWindow.Dispatcher != null)
-            {
-                if (_mainWindow.Dispatcher.CheckAccess())
-                {
-                    // Already on UI thread
-                    _mainWindow?.AddToOutput(logMessage);
-                }
-                else
-                {
-                    _mainWindow.Dispatcher.Invoke(() =>
-                    {
-                        _mainWindow?.AddToOutput(logMessage);
-                    });
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            // MainWindow not available yet, just use console
-            Console.WriteLine($"Failed to log to MainWindow: {ex.Message}");
-        }
+        // Debug logging disabled for clean console output
     }
 }

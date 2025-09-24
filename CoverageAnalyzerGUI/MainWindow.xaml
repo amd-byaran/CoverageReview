@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:CoverageAnalyzerGUI"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
         mc:Ignorable="d"
         Title="Coverage Analyzer - Visual Studio Style (.NET Assembly Integration)" Height="900" Width="1400">
     
@@ -93,8 +94,8 @@
         <!-- Main Content Area -->
         <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
-                <!-- Solution Explorer -->
-                <ColumnDefinition Width="300"/>
+                <!-- Solution Explorer - Resizable -->
+                <ColumnDefinition Width="450" MinWidth="300" MaxWidth="800"/>
                 <!-- Splitter -->
                 <ColumnDefinition Width="Auto"/>
                 <!-- Main Working Area -->
@@ -116,18 +117,237 @@
                                    Foreground="{DynamicResource TextForegroundBrush}"/>
                     </Border>
                     
-                    <!-- Solution Explorer Content -->
+                    <!-- Explorer Tabs -->
+                    <TabControl Grid.Row="1" Name="ExplorerTabControl" TabStripPlacement="Top" 
+                               Background="{DynamicResource ControlBackgroundBrush}"
+                               Foreground="{DynamicResource TextForegroundBrush}"
+                               BorderThickness="0" SelectionChanged="ExplorerTabControl_SelectionChanged">
+                        
+                        <!-- HVP Tab -->
+                        <TabItem Header="Hvp" IsSelected="True">
+                            <!-- HVP Content with Horizontal Scrolling -->
                     <Grid Grid.Row="1">
-                        <!-- TreeView -->
-                        <TreeView Name="SolutionExplorer" 
-                                  Background="{DynamicResource WindowBackgroundBrush}" 
-                                  BorderThickness="0" Margin="4"
-                                  Foreground="{DynamicResource TextForegroundBrush}">
-                            <TreeViewItem Header="Coverage Data" IsExpanded="True">
-                                <TreeViewItem Header="No data loaded - use File → Load Coverage Data" />
-                            </TreeViewItem>
-                        </TreeView>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <!-- Fixed Column Headers -->
+                        <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                            <ScrollViewer x:Name="HeaderScrollViewer" 
+                                          HorizontalScrollBarVisibility="Hidden" 
+                                          VerticalScrollBarVisibility="Disabled"
+                                          CanContentScroll="True"
+                                          PanningMode="Both"
+                                          Focusable="True">
+                                <Grid Margin="4,4,4,4" MinWidth="800">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="250"/>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="80"/>
+                                        <ColumnDefinition Width="50"/>
+                                        <ColumnDefinition Width="50"/>
+                                        <ColumnDefinition Width="50"/>
+                                        <ColumnDefinition Width="50"/>
+                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="60"/>
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <TextBlock Grid.Column="0" Text="Name" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Margin="5,0"/>
+                                    <TextBlock Grid.Column="1" Text="Score" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="2" Text="GroupScore" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="3" Text="Tests" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="4" Text="Pass" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="5" Text="Fail" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="6" Text="Warn" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="7" Text="Assert" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                    <TextBlock Grid.Column="8" Text="Unknown" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
+                                </Grid>
+                            </ScrollViewer>
+                        </Border>
+                        
+                        <!-- Scrollable TreeView -->
+                        <ScrollViewer x:Name="TreeScrollViewer" Grid.Row="1" 
+                                      HorizontalScrollBarVisibility="Auto" 
+                                      VerticalScrollBarVisibility="Auto"
+                                      CanContentScroll="False"
+                                      PanningMode="Both"
+                                      Focusable="True"
+                                      ScrollChanged="TreeScrollViewer_ScrollChanged">
+                            <TreeView Name="SolutionExplorer" 
+                                      Background="{DynamicResource WindowBackgroundBrush}" 
+                                      BorderThickness="0" Margin="4,0,4,4"
+                                      Foreground="{DynamicResource TextForegroundBrush}"
+                                      MinWidth="800"
+                                      SelectedItemChanged="SolutionExplorer_SelectedItemChanged">
+                                <TreeView.Resources>
+                                    <!-- Custom TreeViewItem Template -->
+                                    <Style TargetType="TreeViewItem">
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="TreeViewItem">
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="*"/>
+                                                        </Grid.RowDefinitions>
+                                                        
+                                                        <!-- TreeViewItem Content as Table Row -->
+                                                        <Border Grid.Row="0" x:Name="ItemBorder" 
+                                                                Background="{TemplateBinding Background}"
+                                                                BorderBrush="{DynamicResource BorderBrush}" 
+                                                                BorderThickness="0,0,0,1" 
+                                                                Padding="2">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="16"/>
+                                                                    <ColumnDefinition Width="234"/>
+                                                                    <ColumnDefinition Width="60"/>
+                                                                    <ColumnDefinition Width="80"/>
+                                                                    <ColumnDefinition Width="50"/>
+                                                                    <ColumnDefinition Width="50"/>
+                                                                    <ColumnDefinition Width="50"/>
+                                                                    <ColumnDefinition Width="50"/>
+                                                                    <ColumnDefinition Width="60"/>
+                                                                    <ColumnDefinition Width="60"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                
+                                                                <!-- Expander Button -->
+                                                                <ToggleButton Grid.Column="0" x:Name="Expander" 
+                                                                              ClickMode="Press" 
+                                                                              IsChecked="{Binding Path=IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                                                                    <ToggleButton.Style>
+                                                                        <Style TargetType="ToggleButton">
+                                                                            <Setter Property="Focusable" Value="False"/>
+                                                                            <Setter Property="Width" Value="16"/>
+                                                                            <Setter Property="Height" Value="16"/>
+                                                                            <Setter Property="Template">
+                                                                                <Setter.Value>
+                                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                                        <Border Background="Transparent" Height="16" Padding="5,5,5,5" Width="16">
+                                                                                            <Path x:Name="ExpandPath" Data="M0,0 L0,6 L6,0 z" Fill="{DynamicResource TextForegroundBrush}" Stroke="{DynamicResource TextForegroundBrush}">
+                                                                                                <Path.RenderTransform>
+                                                                                                    <RotateTransform Angle="135" CenterX="3" CenterY="3"/>
+                                                                                                </Path.RenderTransform>
+                                                                                            </Path>
+                                                                                        </Border>
+                                                                                        <ControlTemplate.Triggers>
+                                                                                            <Trigger Property="IsChecked" Value="True">
+                                                                                                <Setter Property="RenderTransform" TargetName="ExpandPath">
+                                                                                                    <Setter.Value>
+                                                                                                        <RotateTransform Angle="180" CenterX="3" CenterY="3"/>
+                                                                                                    </Setter.Value>
+                                                                                                </Setter>
+                                                                                            </Trigger>
+                                                                                        </ControlTemplate.Triggers>
+                                                                                    </ControlTemplate>
+                                                                                </Setter.Value>
+                                                                            </Setter>
+                                                                        </Style>
+                                                                    </ToggleButton.Style>
+                                                                </ToggleButton>
+                                                                
+                                                                <!-- Content will be bound by code-behind -->
+                                                                <ContentPresenter Grid.Column="1" Grid.ColumnSpan="10" 
+                                                                                  x:Name="PART_Header" 
+                                                                                  ContentSource="Header"
+                                                                                  HorizontalAlignment="Stretch"/>
+                                                            </Grid>
+                                                        </Border>
+                                                        
+                                                        <!-- Child Items with Indentation -->
+                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost" Margin="20,0,0,0"/>
+                                                    </Grid>
+                                                    
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsExpanded" Value="false">
+                                                            <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                        <Trigger Property="HasItems" Value="false">
+                                                            <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="true">
+                                                            <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </TreeView.Resources>
+                                
+                                <TreeViewItem Header="Coverage Data" IsExpanded="True">
+                                    <TreeViewItem Header="No data loaded - use File → Load Coverage Data" />
+                                </TreeViewItem>
+                            </TreeView>
+                        </ScrollViewer>
                     </Grid>
+                        </TabItem>
+                        
+                        <!-- Stat Tab -->
+                        <TabItem Header="Stat">
+                            <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- Statistics Header -->
+                                <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" 
+                                        Padding="8,4">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="Coverage Statistics" FontWeight="Bold" FontSize="11"
+                                                   Foreground="{DynamicResource TextForegroundBrush}" 
+                                                   VerticalAlignment="Center"/>
+                                        <Button Grid.Column="1" Content="Load Stats" 
+                                                Background="{DynamicResource ButtonBackgroundBrush}"
+                                                Foreground="{DynamicResource TextForegroundBrush}"
+                                                Padding="8,2" Margin="5,0,0,0"
+                                                Click="LoadStats_Click"/>
+                                    </Grid>
+                                </Border>
+                                
+                                <!-- Statistics TreeView Content -->
+                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" 
+                                              HorizontalScrollBarVisibility="Auto"
+                                              Background="{DynamicResource WindowBackgroundBrush}"
+                                              PanningMode="Both"
+                                              Focusable="True">
+                                    <TreeView Name="StatsTreeView" 
+                                              Background="{DynamicResource WindowBackgroundBrush}" 
+                                              BorderThickness="0" Margin="4,4,4,4"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              SelectedItemChanged="StatsTreeView_SelectedItemChanged">
+                                        <TreeViewItem Header="Load coverage data to view statistics" />
+                                    </TreeView>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
                 </Grid>
             </Border>
 
@@ -137,26 +357,74 @@
 
             <!-- Main Working Area -->
             <Grid Grid.Column="2" Background="{DynamicResource WindowBackgroundBrush}">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                
-                <!-- Tab Control -->
-                <Border Grid.Row="0" Background="{DynamicResource ControlBackgroundBrush}" 
-                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
-                    <TabControl Name="MainTabControl" TabStripPlacement="Top" BorderThickness="0"
-                               Background="{DynamicResource ControlBackgroundBrush}"
-                               Foreground="{DynamicResource TextForegroundBrush}">
-                        <TabItem Header="Coverage Overview">
-                            <Grid Background="{DynamicResource WindowBackgroundBrush}">
-                                <TextBlock Text="Main working area - Coverage data will be displayed here" 
-                                          HorizontalAlignment="Center" 
-                                          VerticalAlignment="Center"
-                                          FontSize="16" 
-                                          Foreground="{DynamicResource TextForegroundBrush}"/>
+                <!-- Tab Control takes full area -->
+                <TabControl Name="MainTabControl" TabStripPlacement="Top" BorderThickness="0"
+                           Background="{DynamicResource ControlBackgroundBrush}"
+                           Foreground="{DynamicResource TextForegroundBrush}"
+                           SelectedIndex="0">
+                    <TabItem Header="🌐 HVP Browser" IsSelected="True">
+                        <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                            <!-- WebView2 Browser for HVP HTML Reports -->
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- Browser toolbar -->
+                                <Border Grid.Row="0" Background="{DynamicResource ControlBackgroundBrush}" 
+                                        BorderBrush="{DynamicResource BorderBrush}" 
+                                        BorderThickness="0,0,0,1" Padding="10,5">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Button Name="BackButton" 
+                                              Content="← Back" 
+                                              Click="BackButton_Click"
+                                              Padding="8,4"
+                                              Margin="0,0,5,0"
+                                              Background="{DynamicResource ControlBackgroundBrush}"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              BorderBrush="{DynamicResource BorderBrush}"
+                                              IsEnabled="False"/>
+                                        <Button Name="ForwardButton" 
+                                              Content="Forward →" 
+                                              Click="ForwardButton_Click"
+                                              Padding="8,4"
+                                              Margin="0,0,5,0"
+                                              Background="{DynamicResource ControlBackgroundBrush}"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              BorderBrush="{DynamicResource BorderBrush}"
+                                              IsEnabled="False"/>
+                                        <Button Name="RefreshButton" 
+                                              Content="🔄 Refresh" 
+                                              Click="RefreshButton_Click"
+                                              Padding="8,4"
+                                              Margin="0,0,15,0"
+                                              Background="{DynamicResource ControlBackgroundBrush}"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              BorderBrush="{DynamicResource BorderBrush}"/>
+                                        <Separator Margin="0,0,10,0"/>
+                                        <TextBlock Text="🌐 HVP Report Browser" 
+                                                 VerticalAlignment="Center" 
+                                                 FontWeight="Bold"
+                                                 Foreground="{DynamicResource TextForegroundBrush}" 
+                                                 Margin="0,0,15,0"/>
+                                        <Button Name="LoadTestReportButton" 
+                                              Content="📄 Load Test Report" 
+                                              Click="LoadTestReportButton_Click"
+                                              Padding="8,4"
+                                              Background="{DynamicResource ControlBackgroundBrush}"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              BorderBrush="{DynamicResource BorderBrush}"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <!-- WebView2 Browser -->
+                                <wv2:WebView2 Grid.Row="1" Name="HvpBrowser" 
+                                              Source="about:blank"
+                                              Margin="2"/>
                             </Grid>
-                        </TabItem>
+                        </Grid>
+                    </TabItem>
                         <TabItem Header="Module Analysis">
                             <Grid Background="{DynamicResource WindowBackgroundBrush}">
                                 <TextBlock Text="Module analysis view will be implemented here" 
@@ -176,7 +444,6 @@
                             </Grid>
                         </TabItem>
                     </TabControl>
-                </Border>
             </Grid>
         </Grid>
 
@@ -230,10 +497,15 @@
             <StatusBarItem>
                 <StackPanel Orientation="Horizontal" Margin="20,0,0,0">
                     <TextBlock Name="ProjectInfoText" Text="No project loaded" FontWeight="Bold" Margin="0,0,10,0"/>
-                    <!-- Progress bar for long operations -->
-                    <ProgressBar Name="OperationProgress" Width="200" Height="16" 
-                                Visibility="Collapsed" Margin="10,0,0,0"
-                                IsIndeterminate="True"/>
+                    <!-- Progress bar for long operations with percentage -->
+                    <ProgressBar Name="OperationProgress" Width="300" Height="14" 
+                                Visibility="Collapsed" Margin="15,0,0,0"
+                                IsIndeterminate="True" 
+                                Background="LightGray" 
+                                Foreground="LimeGreen"
+                                BorderBrush="DarkGray" 
+                                BorderThickness="1"
+                                Minimum="0" Maximum="100"/>
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
