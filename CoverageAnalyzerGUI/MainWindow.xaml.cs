@@ -81,40 +81,88 @@ public class HvpNodePropertyViewModel
 }
 
 /// <summary>
-/// Utility class for creating color spectrum from red to yellow to green
+/// Color style information for coverage percentage display
 /// </summary>
-public static class ColorSpectrum
+public class CoverageColorStyle
 {
+    public SolidColorBrush Foreground { get; set; }
+    public SolidColorBrush Background { get; set; }
+    
+    public CoverageColorStyle(SolidColorBrush foreground, SolidColorBrush background)
+    {
+        Foreground = foreground;
+        Background = background;
+    }
+}
+
+/// <summary>
+/// Utility class for creating color mapping based on coverage percentages
+/// Uses a 10-color scheme (s0-s10) for different percentage ranges
+/// </summary>
+public static class CoverageColorMapping
+{
+    // Define the color styles based on the provided CSS
+    private static readonly Dictionary<int, CoverageColorStyle> ColorStyles = new Dictionary<int, CoverageColorStyle>
+    {
+        { 0, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(255, 255, 255)), new SolidColorBrush(Color.FromRgb(204, 0, 0))) },    // s0: white text, dark red bg
+        { 1, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(255, 255, 255)), new SolidColorBrush(Color.FromRgb(204, 0, 0))) },    // s1: white text, dark red bg
+        { 2, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 0, 0))) },          // s2: black text, red bg
+        { 3, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 0, 0))) },          // s3: black text, red bg
+        { 4, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 153, 0))) },        // s4: black text, orange bg
+        { 5, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 153, 0))) },        // s5: black text, orange bg
+        { 6, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 255, 0))) },        // s6: black text, yellow bg
+        { 7, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 255, 0))) },        // s7: black text, yellow bg
+        { 8, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(0, 255, 0))) },          // s8: black text, bright green bg
+        { 9, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(0, 255, 0))) },          // s9: black text, bright green bg
+        { 10, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(0, 187, 0))) }          // s10: black text, dark green bg
+    };
+    
     /// <summary>
-    /// Creates a color based on percentage (0-100) from red (0%) to yellow (50%) to green (100%)
+    /// Gets the color style for a given percentage (0-100)
+    /// Maps percentages to style classes: 0-10% = s0/s1, 10-20% = s2/s3, etc.
     /// </summary>
     /// <param name="percentage">Percentage value (0-100)</param>
-    /// <returns>SolidColorBrush with appropriate color</returns>
-    public static SolidColorBrush GetColorForPercentage(double percentage)
+    /// <returns>CoverageColorStyle with appropriate foreground and background colors</returns>
+    public static CoverageColorStyle GetColorStyleForPercentage(double percentage)
     {
         // Clamp percentage to 0-100 range
         percentage = Math.Max(0, Math.Min(100, percentage));
         
-        byte red, green, blue;
-        
-        if (percentage <= 50)
+        // Map percentage to style index (0-10)
+        // 0-10% = s0/s1, 10-20% = s2/s3, 20-30% = s4/s5, etc.
+        int styleIndex;
+        if (percentage < 10)
         {
-            // From red (0%) to yellow (50%)
-            // Red stays at 255, green increases from 0 to 255
-            red = 255;
-            green = (byte)(255 * (percentage / 50.0));
-            blue = 0;
+            styleIndex = percentage < 5 ? 0 : 1;  // 0-5% = s0, 5-10% = s1
+        }
+        else if (percentage >= 100)
+        {
+            styleIndex = 10;  // 100% = s10
         }
         else
         {
-            // From yellow (50%) to green (100%)
-            // Green stays at 255, red decreases from 255 to 0
-            red = (byte)(255 * ((100 - percentage) / 50.0));
-            green = 255;
-            blue = 0;
+            // 10-99% maps to s2-s9
+            // Every 10% gets 2 style classes, alternate between them
+            int rangeIndex = (int)(percentage / 10);  // 1-9 for 10-99%
+            styleIndex = rangeIndex * 2;  // s2, s4, s6, s8 for even ranges
+            if (percentage % 10 >= 5)  // Use odd style for second half of range
+            {
+                styleIndex = Math.Min(9, styleIndex + 1);  // s3, s5, s7, s9
+            }
+            if (styleIndex < 2) styleIndex = 2;  // Ensure minimum s2 for >= 10%
         }
         
-        return new SolidColorBrush(Color.FromRgb(red, green, blue));
+        return ColorStyles.TryGetValue(styleIndex, out var style) ? style : ColorStyles[0];
+    }
+    
+    /// <summary>
+    /// Legacy method for backward compatibility - returns only background brush
+    /// </summary>
+    /// <param name="percentage">Percentage value (0-100)</param>
+    /// <returns>SolidColorBrush with appropriate background color</returns>
+    public static SolidColorBrush GetColorForPercentage(double percentage)
+    {
+        return GetColorStyleForPercentage(percentage).Background;
     }
 }
 
@@ -126,6 +174,10 @@ public partial class MainWindow : Window
     private ProjectSettings? _currentProject;
     private HttpClient? _authenticatedHttpClient;
     private bool _statsLoaded = false;
+    
+    // Event handler tracking for proper cleanup
+    private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs>? _currentNavigationHandler;
+    private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2DOMContentLoadedEventArgs>? _currentDOMHandler;
     
     // Project information for display in status bar
     public string ReleaseName { get; private set; } = string.Empty;
@@ -764,8 +816,18 @@ public partial class MainWindow : Window
                 var startTime = DateTime.Now;
                 bool isCompleted = false;
                 
+                // Clean up previous handlers to prevent multiple firing
+                if (_currentNavigationHandler != null)
+                {
+                    HvpBrowser.CoreWebView2.NavigationCompleted -= _currentNavigationHandler;
+                }
+                if (_currentDOMHandler != null)
+                {
+                    HvpBrowser.CoreWebView2.DOMContentLoaded -= _currentDOMHandler;
+                }
+                
                 // Add DOM content loaded handler for better timing
-                HvpBrowser.CoreWebView2.DOMContentLoaded += (sender, args) =>
+                _currentDOMHandler = (sender, args) =>
                 {
                     if (!isCompleted)
                     {
@@ -789,9 +851,10 @@ public partial class MainWindow : Window
                         });
                     }
                 };
+                HvpBrowser.CoreWebView2.DOMContentLoaded += _currentDOMHandler;
                 
                 // Add navigation completed handler as fallback
-                HvpBrowser.CoreWebView2.NavigationCompleted += (sender, args) =>
+                _currentNavigationHandler = (sender, args) =>
                 {
                     var duration = DateTime.Now - startTime;
                     
@@ -818,6 +881,7 @@ public partial class MainWindow : Window
                         });
                     }
                 };
+                HvpBrowser.CoreWebView2.NavigationCompleted += _currentNavigationHandler;
                 
                 HvpBrowser.CoreWebView2.Navigate(hvpTopPath);
                 AddToOutput($"🌐 Loading HVPTop from URL: {hvpTopPath}");
@@ -1113,16 +1177,21 @@ public partial class MainWindow : Window
 
     public void AddToOutput(string message, LogSeverity severity = LogSeverity.INFO)
     {
-        // Always log to file first with detailed timestamp
-        LogToFile($"OUTPUT-{severity}: {message}");
-
 #if DEBUG
-        // In debug builds, show all messages
-        var showMessage = true;
-#else
-        // In release builds, filter out DEBUG messages
-        var showMessage = severity != LogSeverity.DEBUG;
+        // Only log to file in DEBUG builds to improve performance
+        LogToFile($"OUTPUT-{severity}: {message}");
 #endif
+
+        // Filter out navigation messages (both INFO and ERROR level)
+        if (message.Contains("✅ Navigation completed") || 
+            message.Contains("❌ Navigation failed"))
+        {
+            // Skip these verbose navigation messages entirely
+            return;
+        }
+
+        // Only show ERROR messages to improve performance and reduce UI clutter
+        var showMessage = severity == LogSeverity.ERROR;
 
         if (showMessage)
         {
@@ -1705,6 +1774,7 @@ public partial class MainWindow : Window
     private void SetLightTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Light theme selected");
     private void SetDarkTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Dark theme selected");
     private void RunCoverageAnalysis_Click(object sender, RoutedEventArgs e) => AddToOutput("Run Coverage Analysis clicked");
+    private void CreateJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Create Jira clicked");
     private void Options_Click(object sender, RoutedEventArgs e) => AddToOutput("Options clicked");
     private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show("Coverage Analyzer GUI\nVersion 1.0", "About");
 
@@ -2167,7 +2237,7 @@ public partial class MainWindow : Window
     {
         try
         {
-            return new List<System.Windows.Controls.TreeViewItem> { CreateTreeViewItemFromHvpNode(hvpNode, isRoot: true) };
+            return new List<System.Windows.Controls.TreeViewItem> { CreateTreeViewItemFromHvpNode(hvpNode, isRoot: true, depth: 0) };
         }
         catch (Exception ex)
         {
@@ -2179,7 +2249,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Create a TreeViewItem from an HvpNode with proper table row structure
     /// </summary>
-    private System.Windows.Controls.TreeViewItem CreateTreeViewItemFromHvpNode(object hvpNode, bool isRoot = false)
+    private System.Windows.Controls.TreeViewItem CreateTreeViewItemFromHvpNode(object hvpNode, bool isRoot = false, int depth = 0)
     {
         var treeItem = new System.Windows.Controls.TreeViewItem();
         var nodeType = hvpNode.GetType();
@@ -2194,6 +2264,7 @@ public partial class MainWindow : Window
         var failCountProperty = nodeType.GetProperty("FailCount");
         var warnCountProperty = nodeType.GetProperty("WarnCount");
         var assertCountProperty = nodeType.GetProperty("AssertCount");
+        var assertProperty = nodeType.GetProperty("ASSERT");
         var unknownCountProperty = nodeType.GetProperty("UnknownCount");
         var childrenProperty = nodeType.GetProperty("Children");
         var linkProperty = nodeType.GetProperty("Link");
@@ -2241,33 +2312,43 @@ public partial class MainWindow : Window
         var failCount = failCountProperty?.GetValue(hvpNode);
         var warnCount = warnCountProperty?.GetValue(hvpNode);
         var assertCount = assertCountProperty?.GetValue(hvpNode);
+        var assertValue = assertProperty?.GetValue(hvpNode);
         var unknownCount = unknownCountProperty?.GetValue(hvpNode);
         
         // Score debugging removed for performance
         
-        // Create table row structure as Header
+        // Create table row structure as Header - with separator column
         var tableRow = new Grid();
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(184) }); // Name - wider for better readability
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Score - wider for percentages
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });  // GroupScore - wider for percentages
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // TestCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // PassCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // FailCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(60) });  // WarnCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });  // AssertCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(70) });  // UnknownCount
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) }); // Remaining space
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(234) }); // Name
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1) });   // Separator
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Score
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) }); // GroupScore
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Assert Score
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });  // Tests Score
         
-        // Create text blocks for each column
+        // Name column with depth-based indentation
+        var indentString = new string(' ', depth * 4); // 4 spaces per level
         var nameText = new TextBlock 
         { 
-            Text = nodeName, 
+            Text = indentString + nodeName, 
             VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Left,
             Padding = new Thickness(4, 2, 4, 2),
             Foreground = new SolidColorBrush(Colors.Black)
         };
         Grid.SetColumn(nameText, 0);
         tableRow.Children.Add(nameText);
+        
+        // Separator line
+        var separator = new Border
+        {
+            Background = new SolidColorBrush(Color.FromArgb(77, 128, 128, 128)), // Semi-transparent gray
+            Width = 1,
+            VerticalAlignment = VerticalAlignment.Stretch,
+            Margin = new Thickness(0, 2, 0, 2)
+        };
+        Grid.SetColumn(separator, 1);
+        tableRow.Children.Add(separator);
         
         // Score column with color coding
         var scoreText = new TextBlock 
@@ -2276,14 +2357,19 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
+            FontFamily = new FontFamily("Consolas")
         };
         if (score is double scoreDouble)
         {
-            scoreText.Background = ColorSpectrum.GetColorForPercentage(scoreDouble);
+            var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(scoreDouble);
+            scoreText.Foreground = colorStyle.Foreground;
+            scoreText.Background = colorStyle.Background;
         }
-        Grid.SetColumn(scoreText, 1);
+        else
+        {
+            scoreText.Foreground = new SolidColorBrush(Colors.Black);
+        }
+        Grid.SetColumn(scoreText, 2);
         tableRow.Children.Add(scoreText);
         
         // GroupScore column with color coding
@@ -2293,93 +2379,132 @@ public partial class MainWindow : Window
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
+            FontFamily = new FontFamily("Consolas")
         };
         if (groupScore is double groupScoreDouble)
         {
-            groupScoreText.Background = ColorSpectrum.GetColorForPercentage(groupScoreDouble);
+            var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(groupScoreDouble);
+            groupScoreText.Foreground = colorStyle.Foreground;
+            groupScoreText.Background = colorStyle.Background;
         }
-        Grid.SetColumn(groupScoreText, 2);
+        else
+        {
+            groupScoreText.Foreground = new SolidColorBrush(Colors.Black);
+        }
+        Grid.SetColumn(groupScoreText, 3);
         tableRow.Children.Add(groupScoreText);
         
-        // TestCount column
-        var testCountText = new TextBlock 
+        // Assert Score column (using ASSERT property from HVPNode)
+        var assertScoreText = new TextBlock 
         { 
-            Text = testCount?.ToString() ?? "",
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
+            FontFamily = new FontFamily("Consolas")
         };
-        Grid.SetColumn(testCountText, 3);
-        tableRow.Children.Add(testCountText);
         
-        // PassCount column
-        var passCountText = new TextBlock 
-        { 
-            Text = passCount?.ToString() ?? "",
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
-        };
-        Grid.SetColumn(passCountText, 4);
-        tableRow.Children.Add(passCountText);
+        // Use ASSERT property value if available, fallback to assertCount
+        if (assertValue != null)
+        {
+            double assertPercentage = 0.0;
+            bool isValidPercentage = false;
+            
+            // Try to parse ASSERT value as percentage
+            if (assertValue is double directDouble)
+            {
+                assertPercentage = directDouble;
+                isValidPercentage = true;
+            }
+            else if (assertValue is float directFloat)
+            {
+                assertPercentage = directFloat;
+                isValidPercentage = true;
+            }
+            else if (assertValue is string assertString && !string.IsNullOrEmpty(assertString))
+            {
+                // Try to parse string as double, handle both decimal separators
+                var normalizedString = assertString.Replace(',', '.');
+                if (double.TryParse(normalizedString, out double parsedValue))
+                {
+                    assertPercentage = parsedValue;
+                    isValidPercentage = true;
+                }
+            }
+            else if (assertValue is int assertInt)
+            {
+                assertPercentage = assertInt;
+                isValidPercentage = true;
+            }
+            
+            if (isValidPercentage)
+            {
+                assertScoreText.Text = $"{assertPercentage:F1}%";
+                // Apply color coding for percentage values
+                var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(assertPercentage);
+                assertScoreText.Foreground = colorStyle.Foreground;
+                assertScoreText.Background = colorStyle.Background;
+            }
+            else
+            {
+                assertScoreText.Text = assertValue.ToString() ?? "";
+                assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
+            }
+        }
+        else if (assertCount != null)
+        {
+            // If no ASSERT property but assertCount exists, try to convert it
+            if (assertCount is int assertCountInt && assertCountInt >= 0)
+            {
+                // If assertCount is available, treat it as a percentage value
+                double assertPercentage = assertCountInt;
+                assertScoreText.Text = $"{assertPercentage:F1}%";
+                var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(assertPercentage);
+                assertScoreText.Foreground = colorStyle.Foreground;
+                assertScoreText.Background = colorStyle.Background;
+            }
+            else
+            {
+                assertScoreText.Text = assertCount.ToString() ?? "";
+                assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
+            }
+        }
+        else
+        {
+            assertScoreText.Text = "";
+            assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
+        }
         
-        // FailCount column
-        var failCountText = new TextBlock 
-        { 
-            Text = failCount?.ToString() ?? "",
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
-        };
-        Grid.SetColumn(failCountText, 5);
-        tableRow.Children.Add(failCountText);
+        Grid.SetColumn(assertScoreText, 4);
+        tableRow.Children.Add(assertScoreText);
         
-        // WarnCount column
-        var warnCountText = new TextBlock 
+        // Tests Score column (calculated as passCount*100/testCount with color coding)
+        var testsScoreText = new TextBlock 
         { 
-            Text = warnCount?.ToString() ?? "",
             VerticalAlignment = VerticalAlignment.Center,
             HorizontalAlignment = HorizontalAlignment.Right,
             Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
+            FontFamily = new FontFamily("Consolas")
         };
-        Grid.SetColumn(warnCountText, 6);
-        tableRow.Children.Add(warnCountText);
         
-        // AssertCount column
-        var assertCountText = new TextBlock 
-        { 
-            Text = assertCount?.ToString() ?? "",
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
-        };
-        Grid.SetColumn(assertCountText, 7);
-        tableRow.Children.Add(assertCountText);
+        // Calculate test score percentage: (passCount * 100) / testCount
+        if (testCount is int testCountVal && testCountVal > 0 && passCount is int passCountVal)
+        {
+            double testScorePercentage = (passCountVal * 100.0) / testCountVal;
+            testsScoreText.Text = $"{testScorePercentage:F1}%";
+            
+            // Apply color coding based on percentage
+            var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(testScorePercentage);
+            testsScoreText.Foreground = colorStyle.Foreground;
+            testsScoreText.Background = colorStyle.Background;
+        }
+        else
+        {
+            testsScoreText.Text = "";
+            testsScoreText.Foreground = new SolidColorBrush(Colors.Black);
+        }
         
-        // UnknownCount column
-        var unknownCountText = new TextBlock 
-        { 
-            Text = unknownCount?.ToString() ?? "",
-            VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
-            FontFamily = new FontFamily("Consolas"),
-            Foreground = new SolidColorBrush(Colors.Black)
-        };
-        Grid.SetColumn(unknownCountText, 8);
-        tableRow.Children.Add(unknownCountText);
+        Grid.SetColumn(testsScoreText, 5);
+        tableRow.Children.Add(testsScoreText);
         
         // Set the table row as the header
         treeItem.Header = tableRow;
@@ -2533,7 +2658,7 @@ public partial class MainWindow : Window
                 {
                     if (child != null)
                     {
-                        var childItem = CreateTreeViewItemFromHvpNode(child, isRoot: false);
+                        var childItem = CreateTreeViewItemFromHvpNode(child, isRoot: false, depth: depth + 1);
                         treeItem.Items.Add(childItem);
                     }
                 }
@@ -3199,8 +3324,18 @@ public partial class MainWindow : Window
                 var startTime = DateTime.Now;
                 AddToOutput($"⏱️ Navigating to: {url}");
                 
+                // Clean up previous handlers to prevent multiple firing
+                if (_currentNavigationHandler != null)
+                {
+                    HvpBrowser.CoreWebView2.NavigationCompleted -= _currentNavigationHandler;
+                }
+                if (_currentDOMHandler != null)
+                {
+                    HvpBrowser.CoreWebView2.DOMContentLoaded -= _currentDOMHandler;
+                }
+                
                 // Add navigation completed handler for timing and progress
-                HvpBrowser.CoreWebView2.NavigationCompleted += (sender, args) =>
+                _currentNavigationHandler = (sender, args) =>
                 {
                     var duration = DateTime.Now - startTime;
                     if (args.IsSuccess)
@@ -3232,6 +3367,7 @@ public partial class MainWindow : Window
                         });
                     }
                 };
+                HvpBrowser.CoreWebView2.NavigationCompleted += _currentNavigationHandler;
                 
                 HvpBrowser.CoreWebView2.Navigate(url);
             }

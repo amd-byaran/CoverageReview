@@ -68,6 +68,9 @@
             <MenuItem Header="_Tools">
                 <MenuItem Header="_Coverage Analysis" Click="RunCoverageAnalysis_Click"/>
                 <MenuItem Header="_Reload Project" Click="TestHvpTreeView_Click"/>
+                <Separator/>
+                <MenuItem Header="Create _Jira" Click="CreateJira_Click"/>
+                <Separator/>
                 <MenuItem Header="_Options..." Click="Options_Click"/>
             </MenuItem>
             <MenuItem Header="_Help">
@@ -80,14 +83,17 @@
             <ToolBar Background="{DynamicResource ControlBackgroundBrush}" 
                      Foreground="{DynamicResource TextForegroundBrush}">
                 <Button Click="NewProject_Click" ToolTip="New Project" 
-                        Content="New" Padding="8,4"/>
+                        Content="📄" Padding="6,4" FontSize="14" Width="32" Height="28"/>
                 <Button Click="OpenProject_Click" ToolTip="Open Project" 
-                        Content="Open" Padding="8,4"/>
+                        Content="📁" Padding="6,4" FontSize="14" Width="32" Height="28"/>
                 <Button Click="Save_Click" ToolTip="Save" 
-                        Content="Save" Padding="8,4"/>
+                        Content="💾" Padding="6,4" FontSize="14" Width="32" Height="28"/>
                 <Separator/>
                 <Button Click="RunCoverageAnalysis_Click" ToolTip="Run Coverage Analysis" 
-                        Content="Run Analysis" Padding="8,4"/>
+                        Content="▶️" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                <Separator/>
+                <Button Click="CreateJira_Click" ToolTip="Create Jira" 
+                        Content="🎫" Padding="6,4" FontSize="14" Width="32" Height="28"/>
             </ToolBar>
         </ToolBarTray>
 
@@ -141,17 +147,13 @@
                                           CanContentScroll="True"
                                           PanningMode="Both"
                                           Focusable="True">
-                                <Grid Margin="4,4,4,4" MinWidth="800">
+                                <Grid Margin="4,4,4,4" MinWidth="500">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="250"/>
-                                        <ColumnDefinition Width="60"/>
                                         <ColumnDefinition Width="80"/>
-                                        <ColumnDefinition Width="50"/>
-                                        <ColumnDefinition Width="50"/>
-                                        <ColumnDefinition Width="50"/>
-                                        <ColumnDefinition Width="50"/>
-                                        <ColumnDefinition Width="60"/>
-                                        <ColumnDefinition Width="60"/>
+                                        <ColumnDefinition Width="100"/>
+                                        <ColumnDefinition Width="80"/>
+                                        <ColumnDefinition Width="90"/>
                                     </Grid.ColumnDefinitions>
                                     
                                     <TextBlock Grid.Column="0" Text="Name" FontWeight="Bold" FontSize="11"
@@ -163,22 +165,10 @@
                                     <TextBlock Grid.Column="2" Text="GroupScore" FontWeight="Bold" FontSize="11"
                                                Foreground="{DynamicResource TextForegroundBrush}" 
                                                VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="3" Text="Tests" FontWeight="Bold" FontSize="11"
+                                    <TextBlock Grid.Column="3" Text="Assert Score" FontWeight="Bold" FontSize="11"
                                                Foreground="{DynamicResource TextForegroundBrush}" 
                                                VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="4" Text="Pass" FontWeight="Bold" FontSize="11"
-                                               Foreground="{DynamicResource TextForegroundBrush}" 
-                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="5" Text="Fail" FontWeight="Bold" FontSize="11"
-                                               Foreground="{DynamicResource TextForegroundBrush}" 
-                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="6" Text="Warn" FontWeight="Bold" FontSize="11"
-                                               Foreground="{DynamicResource TextForegroundBrush}" 
-                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="7" Text="Assert" FontWeight="Bold" FontSize="11"
-                                               Foreground="{DynamicResource TextForegroundBrush}" 
-                                               VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
-                                    <TextBlock Grid.Column="8" Text="Unknown" FontWeight="Bold" FontSize="11"
+                                    <TextBlock Grid.Column="4" Text="Tests Score" FontWeight="Bold" FontSize="11"
                                                Foreground="{DynamicResource TextForegroundBrush}" 
                                                VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,5,0"/>
                                 </Grid>
@@ -197,7 +187,7 @@
                                       Background="{DynamicResource WindowBackgroundBrush}" 
                                       BorderThickness="0" Margin="4,0,4,4"
                                       Foreground="{DynamicResource TextForegroundBrush}"
-                                      MinWidth="800"
+                                      MinWidth="500"
                                       SelectedItemChanged="SolutionExplorer_SelectedItemChanged">
                                 <TreeView.Resources>
                                     <!-- Custom TreeViewItem Template -->
@@ -219,16 +209,8 @@
                                                                 Padding="2">
                                                             <Grid>
                                                                 <Grid.ColumnDefinitions>
-                                                                    <ColumnDefinition Width="16"/>
-                                                                    <ColumnDefinition Width="234"/>
-                                                                    <ColumnDefinition Width="60"/>
-                                                                    <ColumnDefinition Width="80"/>
-                                                                    <ColumnDefinition Width="50"/>
-                                                                    <ColumnDefinition Width="50"/>
-                                                                    <ColumnDefinition Width="50"/>
-                                                                    <ColumnDefinition Width="50"/>
-                                                                    <ColumnDefinition Width="60"/>
-                                                                    <ColumnDefinition Width="60"/>
+                                                                    <ColumnDefinition Width="16"/>  <!-- Expander -->
+                                                                    <ColumnDefinition Width="*"/>   <!-- Content from Header (full Grid) -->
                                                                 </Grid.ColumnDefinitions>
                                                                 
                                                                 <!-- Expander Button -->
@@ -266,16 +248,16 @@
                                                                     </ToggleButton.Style>
                                                                 </ToggleButton>
                                                                 
-                                                                <!-- Content will be bound by code-behind -->
-                                                                <ContentPresenter Grid.Column="1" Grid.ColumnSpan="10" 
+                                                                <!-- Content from Header (the Grid created by code-behind) -->
+                                                                <ContentPresenter Grid.Column="1" 
                                                                                   x:Name="PART_Header" 
                                                                                   ContentSource="Header"
                                                                                   HorizontalAlignment="Stretch"/>
                                                             </Grid>
                                                         </Border>
                                                         
-                                                        <!-- Child Items with Indentation -->
-                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost" Margin="20,0,0,0"/>
+                                                        <!-- Child Items with NO indentation to prevent separator shift -->
+                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"/>
                                                     </Grid>
                                                     
                                                     <ControlTemplate.Triggers>
@@ -315,20 +297,9 @@
                                 <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
                                         BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" 
                                         Padding="8,4">
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="Coverage Statistics" FontWeight="Bold" FontSize="11"
-                                                   Foreground="{DynamicResource TextForegroundBrush}" 
-                                                   VerticalAlignment="Center"/>
-                                        <Button Grid.Column="1" Content="Load Stats" 
-                                                Background="{DynamicResource ButtonBackgroundBrush}"
-                                                Foreground="{DynamicResource TextForegroundBrush}"
-                                                Padding="8,2" Margin="5,0,0,0"
-                                                Click="LoadStats_Click"/>
-                                    </Grid>
+                                    <TextBlock Text="Coverage Statistics" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center"/>
                                 </Border>
                                 
                                 <!-- Statistics TreeView Content -->
@@ -377,28 +348,37 @@
                                         BorderThickness="0,0,0,1" Padding="10,5">
                                     <StackPanel Orientation="Horizontal">
                                         <Button Name="BackButton" 
-                                              Content="← Back" 
+                                              Content="◀️" 
                                               Click="BackButton_Click"
-                                              Padding="8,4"
-                                              Margin="0,0,5,0"
+                                              ToolTip="Back"
+                                              FontSize="14"
+                                              Padding="6,4"
+                                              Width="32" Height="28"
+                                              Margin="0,0,3,0"
                                               Background="{DynamicResource ControlBackgroundBrush}"
                                               Foreground="{DynamicResource TextForegroundBrush}"
                                               BorderBrush="{DynamicResource BorderBrush}"
                                               IsEnabled="False"/>
                                         <Button Name="ForwardButton" 
-                                              Content="Forward →" 
+                                              Content="▶️" 
                                               Click="ForwardButton_Click"
-                                              Padding="8,4"
-                                              Margin="0,0,5,0"
+                                              ToolTip="Forward"
+                                              FontSize="14"
+                                              Padding="6,4"
+                                              Width="32" Height="28"
+                                              Margin="0,0,3,0"
                                               Background="{DynamicResource ControlBackgroundBrush}"
                                               Foreground="{DynamicResource TextForegroundBrush}"
                                               BorderBrush="{DynamicResource BorderBrush}"
                                               IsEnabled="False"/>
                                         <Button Name="RefreshButton" 
-                                              Content="🔄 Refresh" 
+                                              Content="🔄" 
                                               Click="RefreshButton_Click"
-                                              Padding="8,4"
-                                              Margin="0,0,15,0"
+                                              ToolTip="Refresh"
+                                              FontSize="14"
+                                              Padding="6,4"
+                                              Width="32" Height="28"
+                                              Margin="0,0,10,0"
                                               Background="{DynamicResource ControlBackgroundBrush}"
                                               Foreground="{DynamicResource TextForegroundBrush}"
                                               BorderBrush="{DynamicResource BorderBrush}"/>
@@ -407,14 +387,7 @@
                                                  VerticalAlignment="Center" 
                                                  FontWeight="Bold"
                                                  Foreground="{DynamicResource TextForegroundBrush}" 
-                                                 Margin="0,0,15,0"/>
-                                        <Button Name="LoadTestReportButton" 
-                                              Content="📄 Load Test Report" 
-                                              Click="LoadTestReportButton_Click"
-                                              Padding="8,4"
-                                              Background="{DynamicResource ControlBackgroundBrush}"
-                                              Foreground="{DynamicResource TextForegroundBrush}"
-                                              BorderBrush="{DynamicResource BorderBrush}"/>
+                                                 Margin="0,0,10,0"/>
                                     </StackPanel>
                                 </Border>
                                 
@@ -509,13 +482,7 @@
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
-                <StackPanel Orientation="Horizontal">
-                    <TextBlock Text="Coverage Parser: " Margin="0,0,5,0"/>
-                    <TextBlock Name="ParserStatus" Text="Not Loaded"/>
-                    <TextBlock Text=" | " Margin="10,0"/>
-                    <TextBlock Text="Files: " Margin="0,0,5,0"/>
-                    <TextBlock Name="FileCount" Text="0"/>
-                </StackPanel>
+                <!-- Right side status removed for cleaner look -->
             </StatusBarItem>
         </StatusBar>
     </Grid>
