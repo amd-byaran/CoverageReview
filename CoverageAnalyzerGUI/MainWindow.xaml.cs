@@ -1406,29 +1406,27 @@ public partial class MainWindow : Window
     private async void LoadProjectData()
     {
         if (_currentProject == null) return;
-       
-        // Check if we need HTTP authentication based on project URLs
-        if (RequiresHttpAuthentication())
+        
+        AddToOutput("Project loaded successfully");
+        
+        // Check if we need HTTP authentication first
+        if (RequiresHttpAuthentication() && _authenticatedHttpClient == null)
         {
-            AddToOutput("Project requires HTTP authentication for HVP access");
-            AddToOutput("💡 Use 'File > Test HVP TreeView' to load HVP data with authentication");
+            AddToOutput("🔐 Project requires HTTP authentication - setting up credentials...");
+            await PromptForHttpCredentials();
             
-            // Skip auto-load for URLs that require authentication to avoid errors
-            if (_currentProject.HvpTop?.StartsWith("http") == true && _authenticatedHttpClient == null)
+            // If authentication was cancelled or failed, don't auto-load
+            if (_authenticatedHttpClient == null)
             {
-                AddToOutput("⚠️ Skipping auto-load - HTTP authentication required but not configured");
-                AddToOutput("   You can manually load HVP data using 'File > Test HVP TreeView'");
+                AddToOutput("⚠ Authentication not configured - skipping auto-load");
+                AddToOutput("💡 Use 'File > Test HVP TreeView' to manually load with authentication");
                 return;
             }
-        }
-        else
-        {
-            AddToOutput("Project loaded successfully");
         }
         
         AddToOutput("✓ Project ready. Auto-loading HVP data...");
         
-        // Automatically load HVP data
+        // Automatically load HVP data (authentication is now ready if needed)
         await AutoLoadHvpData();
     }
 
@@ -1733,36 +1731,6 @@ public partial class MainWindow : Window
 
             AddToOutput($"Auto-loading HVP file: {_currentProject.HvpTop}");
             
-            // Set authentication if needed for HTTP/HTTPS URLs
-            if (_currentProject.HvpTop.StartsWith("http://") || _currentProject.HvpTop.StartsWith("https://"))
-            {
-                if (_authenticatedHttpClient != null)
-                {
-                    AddToOutput($"✓ Authentication already configured for this session");
-                }
-                else
-                {
-                    AddToOutput("⚠ No HTTP authentication configured for this session.", LogSeverity.WARNING);
-                    AddToOutput("  Prompting for credentials...");
-                    
-                    // Prompt for credentials
-                    await PromptForHttpCredentials();
-                    
-                    if (_authenticatedHttpClient != null)
-                    {
-
-                    }
-                    else
-                    {
-                        AddToOutput("  No credentials provided - skipping auto-load.");
-                        AddToOutput("⚠ Use 'Test HVP TreeView' menu to load data manually", LogSeverity.WARNING);
-                        return;
-                    }
-                }
-            }
-            
-
-            
             StatusText.Text = "Loading HVP data...";
             
             // Capture authentication credentials for background thread
@@ -1869,37 +1837,17 @@ public partial class MainWindow : Window
         }
         catch (HttpRequestException ex)
         {
-            AddToOutput($"❌ Network error during auto-load: {ex.Message}", LogSeverity.ERROR);
-            AddToOutput("This could be due to:", LogSeverity.WARNING);
-            AddToOutput("- VPN connection required but not active", LogSeverity.WARNING);
-            AddToOutput("- Network connectivity issues", LogSeverity.WARNING);
-            AddToOutput("- Server temporarily unavailable", LogSeverity.WARNING);
-            AddToOutput("- Authentication required but not configured", LogSeverity.WARNING);
-            
-            // Specific suggestions for logviewer-atl.amd.com
-            if (_currentProject?.HvpTop?.Contains("logviewer-atl.amd.com") == true)
-            {
-                AddToOutput("", LogSeverity.INFO);
-                AddToOutput("💡 SPECIFIC SUGGESTIONS for logviewer-atl.amd.com:", LogSeverity.INFO);
-                AddToOutput("1. Connect to AMD VPN if not already connected", LogSeverity.INFO);
-                AddToOutput("2. Use 'File > Test HVP TreeView' to manually load with authentication", LogSeverity.INFO);
-                AddToOutput("3. Verify you're on AMD network or VPN", LogSeverity.INFO);
-                AddToOutput("4. Check if you need to refresh your authentication", LogSeverity.INFO);
-            }
-            
+            AddToOutput($"❌ Auto-load network error: {ex.Message}", LogSeverity.ERROR);
             StatusText.Text = "Network error - use manual load";
         }
         catch (UnauthorizedAccessException ex)
         {
-            AddToOutput($"❌ Authentication error during auto-load: {ex.Message}", LogSeverity.ERROR);
-            AddToOutput("Auto-load skipped - authentication required.", LogSeverity.WARNING);
-            AddToOutput("💡 Use 'File > Test HVP TreeView' to manually load with authentication.", LogSeverity.INFO);
+            AddToOutput($"❌ Auto-load authentication error: {ex.Message}", LogSeverity.ERROR);
             StatusText.Text = "Authentication required - use manual load";
         }
         catch (Exception ex)
         {
             AddToOutput($"❌ Auto-load HVP error: {ex.Message}", LogSeverity.ERROR);
-            AddToOutput("💡 Try using 'File > Test HVP TreeView' for manual loading with better error handling.", LogSeverity.INFO);
             StatusText.Text = "Error loading HVP data";
         }
     }
