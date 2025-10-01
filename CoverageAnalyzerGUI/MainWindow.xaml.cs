@@ -1,21 +1,52 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.IO;
+using JiraAPI;
 using System.Linq;
 using System.Net.Http;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Threading.Tasks;
+using System.Text.Json.Nodes;
 using CoverageAnalyzerGUI.Models;
 using Microsoft.Win32;
 using HvpHtmlParser;
 using Microsoft.Web.WebView2.Wpf;
+using AvalonDock;
+using System.Windows.Input;
 
 namespace CoverageAnalyzerGUI;
+
+/// <summary>
+/// Simple RelayCommand implementation for keyboard shortcuts
+/// </summary>
+public class RelayCommand : ICommand
+{
+    private readonly Action<object?>? _execute;
+    private readonly Func<object?, bool>? _canExecute;
+
+    public RelayCommand(Action<object?>? execute = null, Func<object?, bool>? canExecute = null)
+    {
+        _execute = execute;
+        _canExecute = canExecute;
+    }
+
+    public event EventHandler? CanExecuteChanged
+    {
+        add { CommandManager.RequerySuggested += value; }
+        remove { CommandManager.RequerySuggested -= value; }
+    }
+
+    public bool CanExecute(object? parameter) => _canExecute?.Invoke(parameter) ?? true;
+
+    public void Execute(object? parameter) => _execute?.Invoke(parameter);
+}
 
 /// <summary>
 /// Log severity levels for output filtering
@@ -31,8 +62,10 @@ public enum LogSeverity
 /// <summary>
 /// Represents a node in the coverage hierarchy tree
 /// </summary>
-public class HierarchyNode
+public class HierarchyNode : INotifyPropertyChanged
 {
+    private bool _isSelected;
+    
     public string Name { get; set; }
     public string FullPath { get; set; }
     public string? Link { get; set; } // URL/path to the report file for this node
@@ -41,6 +74,37 @@ public class HierarchyNode
     public int TotalLines { get; set; }
     public List<HierarchyNode> Children { get; set; } = new List<HierarchyNode>();
     public bool IsExpanded { get; set; } = false;
+    
+    public bool IsSelected 
+    { 
+        get => _isSelected; 
+        set 
+        { 
+            if (_isSelected != value)
+            {
+                _isSelected = value;
+                OnPropertyChanged();
+            }
+        } 
+    }
+    
+    public string GroupType 
+    { 
+        get 
+        {
+            if (Children.Count > 0) return "Dir";
+            if (Name.Contains(".cpp") || Name.Contains(".c")) return "File";
+            if (Name.Contains("::")) return "Func";
+            return "Item";
+        } 
+    }
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+    
+    protected virtual void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+    {
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+    }
     
     public HierarchyNode(string name, string fullPath = "")
     {
@@ -105,7 +169,7 @@ public static class CoverageColorMapping
     private static readonly Dictionary<int, CoverageColorStyle> ColorStyles = new Dictionary<int, CoverageColorStyle>
     {
         { 0, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(255, 255, 255)), new SolidColorBrush(Color.FromRgb(204, 0, 0))) },    // s0: white text, dark red bg
-        { 1, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(255, 255, 255)), new SolidColorBrush(Color.FromRgb(204, 0, 0))) },    // s1: white text, dark red bg
+        { 1, new CoverageColorStyle(new SolidColorBrush(Colors.White), new SolidColorBrush(Color.FromRgb(204, 0, 0))) },                   // s1: white text, dark red bg
         { 2, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 0, 0))) },          // s2: black text, red bg
         { 3, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 0, 0))) },          // s3: black text, red bg
         { 4, new CoverageColorStyle(new SolidColorBrush(Color.FromRgb(0, 0, 0)), new SolidColorBrush(Color.FromRgb(255, 153, 0))) },        // s4: black text, orange bg
@@ -173,11 +237,28 @@ public partial class MainWindow : Window
 {
     private ProjectSettings? _currentProject;
     private HttpClient? _authenticatedHttpClient;
+    private JiraApi? _jiraApi;
+    private JsonNode? _jiraEpicTicket;
+    private JsonNode? _jiraStoryTicket;
+    private string _httpUsername = string.Empty;
+    private string _httpPassword = string.Empty;
     private bool _statsLoaded = false;
     
     // Event handler tracking for proper cleanup
     private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs>? _currentNavigationHandler;
     private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2DOMContentLoadedEventArgs>? _currentDOMHandler;
+    
+    // Jira browser event handler tracking
+    private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2NavigationCompletedEventArgs>? _currentJiraNavigationHandler;
+    private EventHandler<Microsoft.Web.WebView2.Core.CoreWebView2DOMContentLoadedEventArgs>? _currentJiraDOMHandler;
+    
+    // Multi-selection support for HVP tree
+    private HashSet<TreeViewItem> _selectedTreeViewItems = new HashSet<TreeViewItem>();
+    private HashSet<HierarchyNode> _selectedNodes = new HashSet<HierarchyNode>();
+    
+    // Multi-selection support for Stats tree
+    private HashSet<TreeViewItem> _selectedStatsTreeViewItems = new HashSet<TreeViewItem>();
+    private HashSet<object> _selectedStatsNodes = new HashSet<object>();
     
     // Project information for display in status bar
     public string ReleaseName { get; private set; } = string.Empty;
@@ -185,13 +266,25 @@ public partial class MainWindow : Window
     public string ReportName { get; private set; } = string.Empty;
     public string ReportType { get; private set; } = string.Empty;
     public string Changelist { get; private set; } = string.Empty;
+    
+    // Commands for keyboard shortcuts
+    public ICommand ToggleOutputCommand { get; private set; }
 
     public MainWindow()
     {
         InitializeComponent();
         
+        // Set DataContext for command bindings
+        DataContext = this;
+        
+        // Initialize commands  
+        ToggleOutputCommand = new RelayCommand(_ => {
+            // Call the existing ToggleOutput_Click method
+            ToggleOutput_Click(this, new RoutedEventArgs());
+        });
+        
         // Enable mouse wheel scrolling for TreeView and ScrollViewers
-        SolutionExplorer.PreviewMouseWheel += SolutionExplorer_PreviewMouseWheel;
+        HvpTreeView.PreviewMouseWheel += SolutionExplorer_PreviewMouseWheel;
         
         try
         {
@@ -200,6 +293,7 @@ public partial class MainWindow : Window
             
             AddToOutput("Welcome to Coverage Analyzer GUI");
             AddToOutput("Ready to create or open a project");
+            AddToOutput("💡 Tip: Press Ctrl+` to toggle Output panel visibility");
             UpdateWindowTitle();
             
             // Initialize WebView2
@@ -211,6 +305,23 @@ public partial class MainWindow : Window
             this.WindowState = WindowState.Normal;
             this.Topmost = true;
             this.Topmost = false; // Reset topmost after activation
+            
+            // Ensure Output panel is visible after the layout is loaded
+            this.Loaded += async (s, e) => {
+                EnsureOutputPanelVisible();
+                AddToOutput("✓ Application ready - Output panel should be visible");
+                
+                // Initialize Jira browser after UI is fully loaded (on UI thread)
+                try 
+                {
+                    AddToOutput("🔄 Initializing Jira browser...", LogSeverity.DEBUG);
+                    await InitializeJiraBrowser();
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"❌ Jira Browser initialization failed: {ex.Message}", LogSeverity.ERROR);
+                }
+            };
             
             LogToFile("MainWindow initialization completed successfully");
         }
@@ -243,6 +354,15 @@ public partial class MainWindow : Window
                     {
                         BackButton.IsEnabled = HvpBrowser.CoreWebView2.CanGoBack;
                         ForwardButton.IsEnabled = HvpBrowser.CoreWebView2.CanGoForward;
+                    });
+                };
+                
+                // Update address bar when source changes
+                HvpBrowser.CoreWebView2.SourceChanged += (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        HvpAddressBar.Text = HvpBrowser.CoreWebView2.Source;
                     });
                 };
                 
@@ -339,6 +459,7 @@ public partial class MainWindow : Window
     
     /// <summary>
     /// Attempts to authenticate using Windows credentials automatically
+    /// Tests authentication for both HVP and Jira servers if available
     /// </summary>
     private async Task<(bool success, HttpClient? httpClient)> TryWindowsAuthentication(string serverUrl)
     {
@@ -357,7 +478,7 @@ public partial class MainWindow : Window
                 Timeout = TimeSpan.FromSeconds(10) // Quick timeout for automatic auth test
             };
             
-            // Test the authentication by making a simple request
+            // Test the authentication by making a simple request to the primary server
             try
             {
                 var testResponse = await httpClient.GetAsync(serverUrl);
@@ -365,12 +486,33 @@ public partial class MainWindow : Window
                 if (testResponse.IsSuccessStatusCode || testResponse.StatusCode != System.Net.HttpStatusCode.Unauthorized)
                 {
                     AddToOutput($"✅ Windows authentication successful for {serverUrl}", LogSeverity.INFO);
+                    
+                    // Also test Jira server if it's different and available
+                    if (_currentProject != null && !string.IsNullOrEmpty(_currentProject.JiraServer))
+                    {
+                        try
+                        {
+                            var jiraResponse = await httpClient.GetAsync(_currentProject.JiraServer);
+                            if (jiraResponse.IsSuccessStatusCode || jiraResponse.StatusCode != System.Net.HttpStatusCode.Unauthorized)
+                            {
+                                AddToOutput($"✅ Windows authentication also works for Jira server: {_currentProject.JiraServer}", LogSeverity.INFO);
+                            }
+                            else
+                            {
+                                AddToOutput($"⚠️ Windows authentication failed for Jira server: {_currentProject.JiraServer}", LogSeverity.WARNING);
+                            }
+                        }
+                        catch (Exception jiraEx)
+                        {
+                            AddToOutput($"⚠️ Could not test Jira server authentication: {jiraEx.Message}", LogSeverity.DEBUG);
+                        }
+                    }
+                    
                     httpClient.Timeout = TimeSpan.FromSeconds(30); // Set normal timeout
                     return (true, httpClient);
                 }
                 else
                 {
-
                     httpClient.Dispose();
                     return (false, null);
                 }
@@ -386,6 +528,68 @@ public partial class MainWindow : Window
             AddToOutput($"Error in Windows authentication: {ex.Message}", LogSeverity.ERROR);
             return (false, null);
         }
+    }
+
+    /// <summary>
+    /// Validates that the authenticated HttpClient works for both HVP and Jira servers
+    /// </summary>
+    private async Task<bool> ValidateDualServerAuthentication()
+    {
+        if (_authenticatedHttpClient == null || _currentProject == null)
+        {
+            return false;
+        }
+
+        var results = new List<(string serverName, string url, bool success)>();
+
+        // Test HVP server if available
+        if (!string.IsNullOrEmpty(_currentProject.HvpTop))
+        {
+            try
+            {
+                var hvpResponse = await _authenticatedHttpClient.GetAsync(_currentProject.HvpTop);
+                var hvpSuccess = hvpResponse.IsSuccessStatusCode || hvpResponse.StatusCode != System.Net.HttpStatusCode.Unauthorized;
+                results.Add(("HVP", _currentProject.HvpTop, hvpSuccess));
+                AddToOutput($"{(hvpSuccess ? "✅" : "❌")} Authentication test for HVP server: {_currentProject.HvpTop}", LogSeverity.DEBUG);
+            }
+            catch (Exception ex)
+            {
+                results.Add(("HVP", _currentProject.HvpTop, false));
+                AddToOutput($"❌ HVP server test failed: {ex.Message}", LogSeverity.DEBUG);
+            }
+        }
+
+        // Test Jira server if available
+        if (!string.IsNullOrEmpty(_currentProject.JiraServer))
+        {
+            try
+            {
+                var jiraResponse = await _authenticatedHttpClient.GetAsync(_currentProject.JiraServer);
+                var jiraSuccess = jiraResponse.IsSuccessStatusCode || jiraResponse.StatusCode != System.Net.HttpStatusCode.Unauthorized;
+                results.Add(("Jira", _currentProject.JiraServer, jiraSuccess));
+                AddToOutput($"{(jiraSuccess ? "✅" : "❌")} Authentication test for Jira server: {_currentProject.JiraServer}", LogSeverity.DEBUG);
+            }
+            catch (Exception ex)
+            {
+                results.Add(("Jira", _currentProject.JiraServer, false));
+                AddToOutput($"❌ Jira server test failed: {ex.Message}", LogSeverity.DEBUG);
+            }
+        }
+
+        var successfulTests = results.Where(r => r.success).ToList();
+        var failedTests = results.Where(r => !r.success).ToList();
+
+        if (successfulTests.Any())
+        {
+            AddToOutput($"✅ Authentication successful for: {string.Join(", ", successfulTests.Select(s => s.serverName))}", LogSeverity.INFO);
+        }
+
+        if (failedTests.Any())
+        {
+            AddToOutput($"⚠️ Authentication failed for: {string.Join(", ", failedTests.Select(f => f.serverName))}", LogSeverity.WARNING);
+        }
+
+        return results.All(r => r.success);
     }
 
     /// <summary>
@@ -478,7 +682,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Configure comprehensive WebView2 authentication using JavaScript injection
+    /// Configure comprehensive WebView2 authentication using JavaScript injection for both HVP and Jira servers
     /// </summary>
     private void ConfigureWebView2Authentication(string username, string password, string encodedCredentials)
     {
@@ -486,23 +690,31 @@ public partial class MainWindow : Window
         {
             var coreWebView2 = HvpBrowser.CoreWebView2;
             
+            // Get server URLs for authentication
+            var hvpServerUrl = !string.IsNullOrEmpty(_currentProject?.HttpServerUrl) ? _currentProject.HttpServerUrl : "";
+            var jiraServerUrl = !string.IsNullOrEmpty(_currentProject?.JiraServer) ? _currentProject.JiraServer : "";
+            
+            AddToOutput($"🔐 Configuring WebView2 authentication for HVP: {hvpServerUrl}, Jira: {jiraServerUrl}", LogSeverity.DEBUG);
+            
             // Use JavaScript injection to handle authentication automatically
             coreWebView2.DOMContentLoaded += async (sender, args) =>
             {
                 try
                 {
-                    // Inject comprehensive authentication handling
+                    // Inject comprehensive authentication handling for both HVP and Jira
                     var script = $@"
                         (function() {{
-                            // Store credentials for automatic authentication
+                            // Store credentials for automatic authentication on both HVP and Jira servers
                             window._webview2Auth = {{
                                 header: 'Basic {encodedCredentials}',
                                 username: '{username}',
                                 password: '{password}',
-                                enabled: true
+                                enabled: true,
+                                hvpServer: '{hvpServerUrl}',
+                                jiraServer: '{jiraServerUrl}'
                             }};
                             
-                            console.log('WebView2: Auth credentials stored for automatic use');
+                            console.log('WebView2: Auth credentials stored for HVP and Jira servers');
                             
                             // Override XMLHttpRequest to add auth headers automatically
                             const originalOpen = XMLHttpRequest.prototype.open;
@@ -512,48 +724,72 @@ public partial class MainWindow : Window
                                 return originalOpen.call(this, method, url, async, user, password);
                             }};
                             
+                            // Helper function to check if URL needs authentication (HVP or Jira server)
+                            const needsAuth = function(url) {{
+                                if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {{
+                                    return false;
+                                }}
+                                const auth = window._webview2Auth;
+                                if (!auth || !auth.enabled) return false;
+                                
+                                // Check if URL matches HVP or Jira server
+                                return (auth.hvpServer && url.includes(auth.hvpServer.replace('https://', '').replace('http://', ''))) ||
+                                       (auth.jiraServer && url.includes(auth.jiraServer.replace('https://', '').replace('http://', '')));
+                            }};
+                            
                             const originalSend = XMLHttpRequest.prototype.send;
                             XMLHttpRequest.prototype.send = function(data) {{
-                                if (this._url && (this._url.startsWith('http://') || this._url.startsWith('https://'))) {{
-                                    if (window._webview2Auth && window._webview2Auth.enabled) {{
-                                        this.setRequestHeader('Authorization', window._webview2Auth.header);
-                                        console.log('WebView2: Auto-auth header added to XMLHttpRequest:', this._url);
-                                    }}
+                                if (needsAuth(this._url)) {{
+                                    this.setRequestHeader('Authorization', window._webview2Auth.header);
+                                    console.log('WebView2: Auto-auth header added to XMLHttpRequest:', this._url);
                                 }}
                                 return originalSend.call(this, data);
                             }};
                             
-                            // Override fetch to add auth headers automatically
+                            // Override fetch to add auth headers automatically for both servers
                             const originalFetch = window.fetch;
                             window.fetch = function(input, init = {{}}) {{
                                 const url = typeof input === 'string' ? input : input.url;
-                                if (url && (url.startsWith('http://') || url.startsWith('https://'))) {{
-                                    if (window._webview2Auth && window._webview2Auth.enabled) {{
-                                        init.headers = init.headers || {{}};
-                                        init.headers['Authorization'] = window._webview2Auth.header;
-                                        console.log('WebView2: Auto-auth header added to fetch:', url);
-                                    }}
+                                if (needsAuth(url)) {{
+                                    init.headers = init.headers || {{}};
+                                    init.headers['Authorization'] = window._webview2Auth.header;
+                                    console.log('WebView2: Auto-auth header added to fetch:', url);
                                 }}
                                 return originalFetch.call(this, input, init);
                             }};
                             
-                            // Handle authentication dialogs automatically
+                            // Handle authentication dialogs automatically for both HVP and Jira
                             const handleAuthDialog = function() {{
-                                // Look for authentication forms and auto-fill them
-                                const usernameFields = document.querySelectorAll('input[type=""text""], input[name*=""user""], input[id*=""user""]');
-                                const passwordFields = document.querySelectorAll('input[type=""password""]');
+                                // Skip if not on an authenticated server
+                                if (!needsAuth(window.location.href)) {{
+                                    return;
+                                }}
+                                
+                                // Look for authentication forms and auto-fill them (works for both HVP and Jira)
+                                const usernameFields = document.querySelectorAll(
+                                    'input[type=""text""], input[type=""email""], input[name*=""user""], input[id*=""user""], ' +
+                                    'input[name*=""login""], input[id*=""login""], input[placeholder*=""user""], input[placeholder*=""email""]'
+                                );
+                                const passwordFields = document.querySelectorAll(
+                                    'input[type=""password""], input[name*=""pass""], input[id*=""pass""]'
+                                );
                                 
                                 if (usernameFields.length > 0 && passwordFields.length > 0) {{
+                                    console.log('WebView2: Auto-filling auth form for', window.location.hostname);
                                     usernameFields[0].value = window._webview2Auth.username;
                                     passwordFields[0].value = window._webview2Auth.password;
                                     
-                                    // Try to submit the form
+                                    // Try to submit the form (works for both HVP and Jira login forms)
                                     const form = usernameFields[0].closest('form');
                                     if (form) {{
-                                        const submitBtn = form.querySelector('button[type=""submit""], input[type=""submit""]');
+                                        const submitBtn = form.querySelector(
+                                            'button[type=""submit""], input[type=""submit""], ' +
+                                            'button[class*=""login""], button[id*=""login""], ' +
+                                            'input[value*=""Login""], input[value*=""Sign""]'
+                                        );
                                         if (submitBtn) {{
-                                            console.log('WebView2: Auto-submitting authentication form');
-                                            submitBtn.click();
+                                            console.log('WebView2: Auto-submitting authentication form for', window.location.hostname);
+                                            setTimeout(() => submitBtn.click(), 200); // Small delay for form validation
                                         }}
                                     }}
                                 }}
@@ -577,12 +813,12 @@ public partial class MainWindow : Window
                                 }});
                             }}
                             
-                            console.log('WebView2: Comprehensive authentication system initialized');
+                            console.log('WebView2: Comprehensive authentication system initialized for both HVP and Jira servers');
                         }})();
                     ";
                     
                     await coreWebView2.ExecuteScriptAsync(script);
-                    AddToOutput("✅ WebView2 auto-authentication system activated", LogSeverity.INFO);
+                    AddToOutput("✅ WebView2 auto-authentication system activated for both HVP and Jira servers", LogSeverity.INFO);
                 }
                 catch (Exception ex)
                 {
@@ -606,7 +842,7 @@ public partial class MainWindow : Window
                 }
             };
             
-            AddToOutput($"✅ WebView2 authentication configured for user: {username}", LogSeverity.INFO);
+            AddToOutput($"✅ WebView2 authentication configured for user: {username} (HVP + Jira servers)", LogSeverity.INFO);
         }
         catch (Exception ex)
         {
@@ -928,24 +1164,37 @@ public partial class MainWindow : Window
         
         try
         {
-            // Paths to the data files
-            string coverageHierarchyPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "hierarchy.txt");
-            
-            AddToOutput($"Loading coverage data from: {coverageHierarchyPath}");
-            
-            // Check if files exist
-            if (!File.Exists(coverageHierarchyPath))
+            // Open file dialog to select coverage data file
+            var openFileDialog = new OpenFileDialog
             {
-                string error = $"ERROR: Coverage hierarchy.txt not found at {coverageHierarchyPath}";
-                AddToOutput(error);
-                StatusText.Text = "Error: Coverage hierarchy.txt not found";
+                Title = "Select Coverage Data File",
+                Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                DefaultExt = "txt"
+            };
+            
+            if (openFileDialog.ShowDialog() != true)
+            {
+                StatusText.Text = "Coverage data loading cancelled";
+                AddToOutput("Coverage data loading cancelled by user");
                 return;
             }
             
-            // Read and parse the hierarchy.txt file
-            LogToFile("Reading hierarchy.txt file...");
+            string coverageFilePath = openFileDialog.FileName;
+            AddToOutput($"Loading coverage data from: {coverageFilePath}");
             
-            var hierarchyData = ParseHierarchyFile(coverageHierarchyPath);
+            // Check if file exists
+            if (!File.Exists(coverageFilePath))
+            {
+                string error = $"ERROR: Coverage file not found at {coverageFilePath}";
+                AddToOutput(error);
+                StatusText.Text = "Error: Coverage file not found";
+                return;
+            }
+            
+            // Read and parse the coverage file
+            LogToFile("Reading coverage file...");
+            
+            var hierarchyData = ParseHierarchyFile(coverageFilePath);
             LogToFile($"Parsed {hierarchyData.Count} hierarchy entries");
             
             // Build hierarchy tree from parsed data
@@ -955,18 +1204,18 @@ public partial class MainWindow : Window
             // Update UI on main thread
             Dispatcher.Invoke(() =>
             {
-                // Clear existing items
-                SolutionExplorer.Items.Clear();
+                // Clear existing items and set data source
+                HvpTreeView.Items.Clear();
+                rootHierarchy.IsExpanded = true;
                 
-                var rootItem = CreateTreeViewItemFromHierarchy(rootHierarchy);
-                rootItem.IsExpanded = true;
-                SolutionExplorer.Items.Add(rootItem);
+                // Use data binding instead of manual TreeViewItem creation
+                HvpTreeView.ItemsSource = new List<HierarchyNode> { rootHierarchy };
                 
-                LogToFile("TreeView updated with hierarchy data");
+                LogToFile("TreeView updated with hierarchy data using data binding");
             });
             
             LogToFile("✅ Hierarchy loaded successfully");
-            AddToOutput("✓ Hierarchy loaded from hierarchy.txt");
+            AddToOutput("✓ Hierarchy loaded from coverage file");
             StatusText.Text = "Coverage data loaded successfully";
             AddToOutput("✓ Coverage data loading completed!");
         }
@@ -1003,7 +1252,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Parses the hierarchy.txt file and returns hierarchy entries
+    /// Parses the coverage file and returns hierarchy entries
     /// </summary>
     private List<HierarchyEntry> ParseHierarchyFile(string filePath)
     {
@@ -1190,8 +1439,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        // Only show ERROR messages to improve performance and reduce UI clutter
-        var showMessage = severity == LogSeverity.ERROR;
+        // Show all message types (INFO, WARNING, ERROR)
+        var showMessage = true;
 
         if (showMessage)
         {
@@ -1284,7 +1533,28 @@ public partial class MainWindow : Window
                 _ => ReportType
             };
             
-            ProjectInfoText.Text = $"Release: {ReleaseName} | Coverage: {displayCoverage} | Report: {ReportName} | Type: {displayReportType} | CL: {Changelist}";
+            // Include Jira information if available
+            var jiraInfo = "";
+            if (_currentProject != null)
+            {
+                var jiraParts = new List<string>();
+                
+                if (!string.IsNullOrEmpty(_currentProject.JiraProject))
+                    jiraParts.Add($"Project: {_currentProject.JiraProject}");
+                    
+                if (!string.IsNullOrEmpty(_currentProject.JiraEpic))
+                    jiraParts.Add($"Epic: {_currentProject.JiraEpic}");
+                    
+                if (!string.IsNullOrEmpty(_currentProject.JiraStory))
+                    jiraParts.Add($"Story: {_currentProject.JiraStory}");
+                
+                if (jiraParts.Count > 0)
+                {
+                    jiraInfo = $" | 🎫 {string.Join(" | ", jiraParts)}";
+                }
+            }
+            
+            ProjectInfoText.Text = $"Release: {ReleaseName} | Coverage: {displayCoverage} | Report: {ReportName} | Type: {displayReportType} | CL: {Changelist}{jiraInfo}";
         }
     }
     
@@ -1312,7 +1582,7 @@ public partial class MainWindow : Window
     }
 
     // Project management methods
-    private void NewProject_Click(object sender, RoutedEventArgs e)
+    private async void NewProject_Click(object sender, RoutedEventArgs e)
     {
         var wizard = new ProjectWizard(this)
         {
@@ -1323,6 +1593,9 @@ public partial class MainWindow : Window
         {
             _currentProject = wizard.CompletedProject;
             _statsLoaded = false; // Reset stats loaded flag for new project
+            
+            // Ensure HTTP authentication is available for new project
+            await EnsureHttpAuthenticationForProject();
             
             // Auto-set HttpServerUrl based on HvpTop URL
             if (!string.IsNullOrEmpty(_currentProject.HvpTop) && 
@@ -1370,7 +1643,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OpenProject_Click(object sender, RoutedEventArgs e)
+    private async void OpenProject_Click(object sender, RoutedEventArgs e)
     {
         var dialog = new OpenFolderDialog()
         {
@@ -1385,6 +1658,25 @@ public partial class MainWindow : Window
             {
                 _currentProject = projectSettings;
                 _statsLoaded = false; // Reset stats loaded flag for loaded project
+                
+                // Debug: Show which project file was loaded and the Jira settings
+                var projectJsonPath = Path.Combine(dialog.FolderName, "project.json");
+                AddToOutput($"📂 Loading project from: {projectJsonPath}", LogSeverity.DEBUG);
+                AddToOutput($"📂 Loaded project - JiraServer: '{_currentProject.JiraServer}'", LogSeverity.DEBUG);
+                AddToOutput($"📂 Loaded project - JiraProject: '{_currentProject.JiraProject}'", LogSeverity.DEBUG);
+                AddToOutput($"📂 Loaded project - JiraEpic: '{_currentProject.JiraEpic}'", LogSeverity.DEBUG);
+                AddToOutput($"📂 Loaded project - JiraStory: '{_currentProject.JiraStory}'", LogSeverity.DEBUG);
+                
+                // Also show if the JSON file exists and has content
+                if (File.Exists(projectJsonPath))
+                {
+                    var jsonContent = File.ReadAllText(projectJsonPath);
+                    var hasJiraSettings = jsonContent.Contains("jiraServer") || jsonContent.Contains("jiraProject");
+                    AddToOutput($"📂 Project JSON file exists ({jsonContent.Length} chars), Contains Jira settings: {hasJiraSettings}", LogSeverity.DEBUG);
+                }
+                
+                // Ensure HTTP authentication is available for opened project
+                await EnsureHttpAuthenticationForProject();
                 
                 // Debug: Show what ReportPath was loaded from JSON
 
@@ -1495,9 +1787,303 @@ public partial class MainWindow : Window
         
         AddToOutput("✓ Project ready. Auto-loading HVP data...");
         
-        // Automatically load HVP data (authentication is now ready if needed)
-        await AutoLoadHvpData();
+        // Run JiraApi creation and HVP data loading in parallel for better performance
+        var jiraTask = Task.Run(() => CreateJiraApiObject());
+        var hvpTask = AutoLoadHvpData();
+        
+        // Wait for both operations to complete
+        await Task.WhenAll(jiraTask, hvpTask);
+        
+        AddToOutput("✓ Project loading completed (HVP + Jira parallel processing)");
+        
+        // Ensure Output panel is visible after loading
+        EnsureOutputPanelVisible();
+        
+        // Load Jira server automatically after authentication is available
+        // Call on UI thread to avoid thread ownership issues
+        _ = LoadJiraServerInBrowser();
     }
+
+    #region Jira Browser Methods
+
+    /// <summary>
+    /// Initialize the Jira Browser WebView2 control
+    /// </summary>
+    private async Task InitializeJiraBrowser()
+    {
+        try
+        {
+            if (JiraBrowser != null)
+            {
+                AddToOutput("🔄 Starting Jira browser initialization...", LogSeverity.DEBUG);
+                
+                // Initialize WebView2 on UI thread
+                await JiraBrowser.EnsureCoreWebView2Async();
+                AddToOutput("✓ Jira CoreWebView2 initialized", LogSeverity.DEBUG);
+                
+                // Configure authentication for the Jira browser
+                JiraBrowser.CoreWebView2.BasicAuthenticationRequested += CoreWebView2_BasicAuthenticationRequested;
+                
+                // Update Jira navigation buttons and address bar when history changes
+                JiraBrowser.CoreWebView2.HistoryChanged += (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        JiraBackButton.IsEnabled = JiraBrowser.CoreWebView2.CanGoBack;
+                        JiraForwardButton.IsEnabled = JiraBrowser.CoreWebView2.CanGoForward;
+                    });
+                };
+                
+                // Update address bar when source changes
+                JiraBrowser.CoreWebView2.SourceChanged += (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        JiraAddressBar.Text = JiraBrowser.CoreWebView2.Source;
+                    });
+                };
+
+                    // Set beautiful welcome content for Jira browser (matching HVP style)
+                    string jiraWelcomeHtml = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Jira Browser</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 0; padding: 40px; 
+            background: linear-gradient(135deg, #0052CC 0%, #2684FF 100%);
+            color: white; text-align: center; 
+        }
+        .container { 
+            max-width: 600px; margin: 0 auto; 
+            background: rgba(255,255,255,0.1); 
+            padding: 30px; border-radius: 15px; 
+            backdrop-filter: blur(10px);
+        }
+        h1 { font-size: 2.5em; margin-bottom: 20px; }
+        p { font-size: 1.2em; line-height: 1.6; margin-bottom: 20px; }
+        .steps { text-align: left; margin: 20px 0; }
+        .step { margin: 10px 0; padding: 10px; background: rgba(255,255,255,0.1); border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div class='container'>
+        <h1>🎫 Jira Browser</h1>
+        <p>Welcome to the integrated Jira workspace!</p>
+        
+        <div class='steps'>
+            <div class='step'>
+                <strong>1. Project Setup</strong><br>
+                Create or open a project with Jira server configuration
+            </div>
+            <div class='step'>
+                <strong>2. Automatic Loading</strong><br>
+                Jira server loads automatically when you open a project
+            </div>
+            <div class='step'>
+                <strong>3. Seamless Integration</strong><br>
+                Create and track Jira issues directly from coverage data
+            </div>
+        </div>
+        
+        <p><em>Ready to manage your project workflow! 🚀</em></p>
+    </div>
+</body>
+</html>";
+                
+                AddToOutput("🌐 Navigating to Jira welcome page...", LogSeverity.DEBUG);
+                JiraBrowser.NavigateToString(jiraWelcomeHtml);
+                
+                AddToOutput("✨ Jira browser initialized with beautiful welcome message", LogSeverity.INFO);
+            }
+            else
+            {
+                AddToOutput("⚠️ JiraBrowser control is null!", LogSeverity.ERROR);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Jira browser initialization error: {ex.Message}", LogSeverity.ERROR);
+            AddToOutput($"Stack trace: {ex.StackTrace}", LogSeverity.DEBUG);
+        }
+    }
+
+    /// <summary>
+    /// Load the Jira Server in the Jira browser
+    /// </summary>
+    private async Task LoadJiraServerInBrowser()
+    {
+        try
+        {
+            if (_currentProject == null || string.IsNullOrEmpty(_currentProject.JiraServer))
+            {
+                AddToOutput("ℹ️ No Jira server configured in current project", LogSeverity.INFO);
+                return;
+            }
+
+            // Check if Jira browser is initialized (must be done on UI thread)
+            bool jiraBrowserReady = false;
+            await Dispatcher.InvokeAsync(() => {
+                jiraBrowserReady = JiraBrowser?.CoreWebView2 != null;
+            });
+            
+            if (!jiraBrowserReady)
+            {
+                AddToOutput("⚠️ Jira browser not ready yet. It should initialize automatically.", LogSeverity.WARNING);
+                return;
+            }
+
+            if (_authenticatedHttpClient == null)
+            {
+                AddToOutput("ℹ️ Waiting for authentication to complete before loading Jira server...", LogSeverity.INFO);
+                // Wait for authentication to be available with better feedback
+                int attempts = 0;
+                while (_authenticatedHttpClient == null && attempts < 60) // Extended to 60 seconds
+                {
+                    await Task.Delay(1000);
+                    attempts++;
+                    
+                    // Provide periodic feedback
+                    if (attempts % 10 == 0)
+                    {
+                        AddToOutput($"⏳ Still waiting for authentication... ({attempts}/60 seconds)", LogSeverity.DEBUG);
+                    }
+                }
+                
+                if (_authenticatedHttpClient == null)
+                {
+                    AddToOutput("⚠️ Authentication timeout after 60 seconds. Jira server not loaded.", LogSeverity.WARNING);
+                    AddToOutput("💡 Jira server will auto-load when you open a project and authenticate.", LogSeverity.INFO);
+                    return;
+                }
+                else
+                {
+                    AddToOutput("✅ Authentication completed! Loading Jira server...", LogSeverity.INFO);
+                }
+            }
+
+            string jiraServerUrl = _currentProject.JiraServer;
+            AddToOutput($"🌐 Loading Jira server: {jiraServerUrl}", LogSeverity.INFO);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                // Clean up existing event handlers
+                if (_currentJiraNavigationHandler != null && JiraBrowser?.CoreWebView2 != null)
+                {
+                    JiraBrowser.CoreWebView2.NavigationCompleted -= _currentJiraNavigationHandler;
+                }
+                if (_currentJiraDOMHandler != null && JiraBrowser?.CoreWebView2 != null)
+                {
+                    JiraBrowser.CoreWebView2.DOMContentLoaded -= _currentJiraDOMHandler;
+                }
+
+                // Create new navigation handlers for Jira
+                _currentJiraNavigationHandler = (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (args.IsSuccess)
+                        {
+                            AddToOutput($"✅ Jira server loaded successfully", LogSeverity.INFO);
+                        }
+                        else
+                        {
+                            AddToOutput($"❌ Failed to load Jira server: {args.WebErrorStatus}", LogSeverity.ERROR);
+                        }
+                    });
+                };
+
+                _currentJiraDOMHandler = (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        AddToOutput("✓ Jira server DOM loaded", LogSeverity.DEBUG);
+                    });
+                };
+
+                // Attach event handlers and navigate
+                if (JiraBrowser?.CoreWebView2 != null)
+                {
+                    JiraBrowser.CoreWebView2.NavigationCompleted += _currentJiraNavigationHandler;
+                    JiraBrowser.CoreWebView2.DOMContentLoaded += _currentJiraDOMHandler;
+                    
+                    // Navigate to Jira server
+                    JiraBrowser.CoreWebView2.Navigate(jiraServerUrl);
+                }
+            });
+            
+            // Log navigation outside of Dispatcher to avoid nested calls
+            AddToOutput($"➡️ Navigating to Jira server: {jiraServerUrl}");
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error loading Jira server: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private void JiraBackButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (JiraBrowser?.CoreWebView2 != null && JiraBrowser.CoreWebView2.CanGoBack)
+            {
+                JiraBrowser.CoreWebView2.GoBack();
+                AddToOutput("Jira browser navigated back");
+            }
+            else
+            {
+                AddToOutput("Cannot navigate back in Jira browser");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error navigating back in Jira browser: {ex.Message}");
+        }
+    }
+
+    private void JiraForwardButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (JiraBrowser?.CoreWebView2 != null && JiraBrowser.CoreWebView2.CanGoForward)
+            {
+                JiraBrowser.CoreWebView2.GoForward();
+                AddToOutput("Jira browser navigated forward");
+            }
+            else
+            {
+                AddToOutput("Cannot navigate forward in Jira browser");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error navigating forward in Jira browser: {ex.Message}");
+        }
+    }
+
+    private void JiraRefreshButton_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (JiraBrowser?.CoreWebView2 != null)
+            {
+                JiraBrowser.CoreWebView2.Reload();
+                AddToOutput("Jira browser refreshed");
+            }
+            else
+            {
+                AddToOutput("Jira browser not initialized");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error refreshing Jira browser: {ex.Message}");
+        }
+    }
+
+    #endregion
 
     /// <summary>
     /// Checks if the current project has any URLs that require HTTP authentication
@@ -1576,7 +2162,13 @@ public partial class MainWindow : Window
                 _authenticatedHttpClient?.Dispose();
                 _authenticatedHttpClient = httpClient;
                 
+                // Extract Windows credentials for JiraApi
+                var (username, domain) = GetWindowsCredentials();
+                _httpUsername = username;
+                _httpPassword = ""; // Windows auth doesn't use explicit password
+                
                 AddToOutput($"✓ HTTP authentication configured for server: {serverUrl}");
+                AddToOutput($"✓ Windows credentials set - Username: {username}", LogSeverity.DEBUG);
                 
                 // Configure WebView2 to use the same authentication
                 ConfigureWebViewAuthentication();
@@ -1590,18 +2182,18 @@ public partial class MainWindow : Window
                 string defaultUsername = Environment.UserName ?? "";
 
                 
-                var (dialogSuccess, dialogHttpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(this, serverUrl, defaultUsername);
+                var (dialogSuccess, dialogHttpClient, rememberCredentials, username, password) = HttpAuthDialog.GetHttpAuthentication(this, serverUrl, defaultUsername);
                 
 
 
                 
                 if (dialogSuccess && dialogHttpClient != null)
                 {
-
-                    
-                    // Store the authenticated HTTP client
+                    // Store the authenticated HTTP client and credentials
                     _authenticatedHttpClient?.Dispose();
                     _authenticatedHttpClient = dialogHttpClient;
+                    _httpUsername = username;
+                    _httpPassword = password;
                     
                     AddToOutput($"✓ HTTP authentication configured for server: {serverUrl}");
                     
@@ -1643,10 +2235,11 @@ public partial class MainWindow : Window
             var rootHierarchy = BuildHierarchyFromParserData(hierarchyData);
             
             // Update UI
-            SolutionExplorer.Items.Clear();
-            var rootItem = CreateTreeViewItemFromHierarchy(rootHierarchy);
-            rootItem.IsExpanded = true;
-            SolutionExplorer.Items.Add(rootItem);
+            HvpTreeView.Items.Clear();
+            rootHierarchy.IsExpanded = true;
+            
+            // Use data binding instead of manual TreeViewItem creation
+            HvpTreeView.ItemsSource = new List<HierarchyNode> { rootHierarchy };
             
             StatusText.Text = $"Loaded project: {_currentProject?.ProjectName}";
             AddToOutput("✓ Project hierarchy loaded successfully");
@@ -1670,6 +2263,106 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// Ensures the Output panel is visible and expanded in AvalonDock
+    /// </summary>
+    private void EnsureOutputPanelVisible()
+    {
+        try
+        {
+            var dockingManager = DockingManager;
+            if (dockingManager?.Layout == null)
+            {
+                AddToOutput("⚠️ DockingManager not found - cannot ensure Output panel visibility", LogSeverity.WARNING);
+                return;
+            }
+
+            // Find the Output anchorable
+            var outputAnchorable = FindAnchorableByContentId(dockingManager.Layout.RootPanel, "Output");
+            
+            if (outputAnchorable != null)
+            {
+                bool wasRestored = false;
+                
+                // Make sure it's visible and not hidden
+                if (outputAnchorable.IsHidden)
+                {
+                    outputAnchorable.Show();
+                    wasRestored = true;
+                    AddToOutput("✓ Output panel restored from hidden state", LogSeverity.DEBUG);
+                }
+                
+                // Make sure it's not auto-hidden (minimized)
+                if (outputAnchorable.IsAutoHidden)
+                {
+                    outputAnchorable.ToggleAutoHide();
+                    wasRestored = true;
+                    AddToOutput("✓ Output panel expanded from auto-hidden state", LogSeverity.DEBUG);
+                }
+                
+                // Ensure it's active/focused and bring it to front
+                outputAnchorable.IsActive = true;
+                outputAnchorable.IsSelected = true;
+                
+                // Force focus to the Output panel
+                Dispatcher.BeginInvoke(() => {
+                    try
+                    {
+                        if (OutputTextBox != null)
+                        {
+                            OutputTextBox.Focus();
+                            OutputTextBox.ScrollToEnd();
+                        }
+                    }
+                    catch { /* Ignore focus errors */ }
+                }, System.Windows.Threading.DispatcherPriority.Background);
+                
+                if (wasRestored)
+                {
+                    AddToOutput("✓ Output panel is now visible, active, and focused", LogSeverity.DEBUG);
+                }
+            }
+            else
+            {
+                AddToOutput("⚠️ Output panel not found in layout", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error ensuring Output panel visibility: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Public method to manually restore the output panel - can be called from anywhere
+    /// </summary>
+    public void RestoreOutputPanel()
+    {
+        EnsureOutputPanelVisible();
+    }
+
+    /// <summary>
+    /// Recursively finds an anchorable by ContentId
+    /// </summary>
+    private Xceed.Wpf.AvalonDock.Layout.LayoutAnchorable? FindAnchorableByContentId(Xceed.Wpf.AvalonDock.Layout.ILayoutElement element, string contentId)
+    {
+        if (element is Xceed.Wpf.AvalonDock.Layout.LayoutAnchorable anchorable && anchorable.ContentId == contentId)
+        {
+            return anchorable;
+        }
+        
+        if (element is Xceed.Wpf.AvalonDock.Layout.ILayoutContainer container)
+        {
+            foreach (var child in container.Children)
+            {
+                var result = FindAnchorableByContentId(child, contentId);
+                if (result != null) return result;
+            }
+        }
+        
+        return null;
+    }
+
+    /// <summary>
     /// Sets the authenticated HTTP client for file access
     /// </summary>
     public void SetHttpAuthentication(HttpClient httpClient)
@@ -1689,13 +2382,402 @@ public partial class MainWindow : Window
     public HttpClient? GetHttpClient() => _authenticatedHttpClient;
 
     /// <summary>
+    /// Creates JiraApi object after successful HTTP authentication and sets up project tickets
+    /// </summary>
+    private async void CreateJiraApiObject()
+    {
+        try
+        {
+            // Debug: Show current project Jira settings
+            AddToOutput($"🔍 Debug - JiraServer: '{_currentProject?.JiraServer ?? "NULL"}'", LogSeverity.DEBUG);
+            AddToOutput($"🔍 Debug - JiraProject: '{_currentProject?.JiraProject ?? "NULL"}'", LogSeverity.DEBUG);
+            AddToOutput($"🔍 Debug - JiraEpic: '{_currentProject?.JiraEpic ?? "NULL"}'", LogSeverity.DEBUG);
+            AddToOutput($"🔍 Debug - JiraStory: '{_currentProject?.JiraStory ?? "NULL"}'", LogSeverity.DEBUG);
+            
+            // Early exit if project doesn't have Jira configuration
+            if (_currentProject == null || string.IsNullOrEmpty(_currentProject.JiraServer) || string.IsNullOrEmpty(_currentProject.JiraProject))
+            {
+                AddToOutput("ℹ️ Skipping JiraApi creation - No Jira configuration found in project", LogSeverity.INFO);
+                return;
+            }
+
+            // Wait for HTTP authentication to be ready (with timeout)
+            // Now using HttpClient-based authentication instead of username/password
+            var timeout = TimeSpan.FromSeconds(15); // Increased timeout
+            var startTime = DateTime.Now;
+            var attempts = 0;
+            const int maxAttempts = 30; // 30 attempts * 500ms = 15 seconds
+            
+            while (_authenticatedHttpClient == null && attempts < maxAttempts)
+            {
+                attempts++;
+                AddToOutput($"⏳ Waiting for HTTP authentication... (attempt {attempts}/{maxAttempts})", LogSeverity.DEBUG);
+                
+                try
+                {
+                    await Task.Delay(500, CancellationToken.None); // Use CancellationToken.None to prevent cancellation
+                }
+                catch (TaskCanceledException)
+                {
+                    AddToOutput("⚠️ Authentication wait was cancelled", LogSeverity.WARNING);
+                    return;
+                }
+            }
+            
+            if (_authenticatedHttpClient == null)
+            {
+                AddToOutput("⚠️ Timeout waiting for HTTP authentication - skipping JiraApi creation", LogSeverity.WARNING);
+                return;
+            }
+            
+            var authenticationType = string.IsNullOrEmpty(_httpPassword) ? "Windows Authentication" : "Basic Authentication";
+            AddToOutput($"✓ HTTP authentication ready after {attempts} attempts - Type: {authenticationType}", LogSeverity.DEBUG);
+            AddToOutput($"✓ Authentication - Username: '{_httpUsername ?? "Windows Integrated"}', HttpClient: {(_authenticatedHttpClient != null ? "Ready" : "Not Available")}", LogSeverity.DEBUG);
+
+            AddToOutput($"🎫 Creating JiraApi for server: {_currentProject.JiraServer}", LogSeverity.INFO);
+            
+            // Validate that the HttpClient can authenticate with both servers
+            AddToOutput("🔍 Validating authentication for all servers...", LogSeverity.DEBUG);
+            var dualServerAuthValid = await ValidateDualServerAuthentication();
+            if (!dualServerAuthValid)
+            {
+                AddToOutput("⚠️ Authentication validation failed for one or more servers", LogSeverity.WARNING);
+            }
+            
+            if (_currentProject != null && !string.IsNullOrEmpty(_currentProject.JiraServer) && 
+                _authenticatedHttpClient != null &&
+                !string.IsNullOrEmpty(_currentProject.JiraProject))
+            {
+                // Dispose existing JiraApi if any
+                _jiraApi?.Dispose();
+                _jiraEpicTicket = null;
+                _jiraStoryTicket = null;
+                
+                // Using JiraAPI v1.0.2 with HttpClient parameter
+                // Constructor: JiraApi(string serverUrl = null, string user = null, string password = null, bool mockingModeEnable = false, HttpClient httpClient = null)
+                // When HttpClient is provided, user and password are not needed as authentication is handled by HttpClient
+                _jiraApi = new JiraApi(
+                    serverUrl: _currentProject.JiraServer,
+                    user: null!,
+                    password: null!,
+                    mockingModeEnable: true,
+                    httpClient: _authenticatedHttpClient!);
+                
+                var authType = string.IsNullOrEmpty(_httpPassword) ? "Windows Authentication" : "Basic Authentication";
+                AddToOutput($"✓ JiraApi created with authenticated HttpClient (v1.0.2)", LogSeverity.DEBUG);
+                AddToOutput($"🔐 Authentication configured - Type: {authType}", LogSeverity.INFO);
+
+                AddToOutput($"✓ JiraApi initialized for server: {_currentProject.JiraServer}", LogSeverity.INFO);                // Setup the Jira project with proper null checking and timeout handling
+                if (_jiraApi != null && _currentProject != null)
+                {
+                    AddToOutput($"🔗 Attempting to connect to Jira server: {_currentProject.JiraServer}", LogSeverity.DEBUG);
+                    AddToOutput($"📋 Setting up Jira project: {_currentProject.JiraProject}");
+                    CancellationTokenSource? timeoutCts = null;
+                    try
+                    {
+                        // Use CancellationTokenSource for explicit timeout control
+                        timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(30)); // 30 second timeout
+                        
+                        // Run SetupProject with explicit timeout
+                        await Task.Run(() => {
+                            try 
+                            {
+                                _jiraApi.SetupProject(_currentProject.JiraProject);
+                            }
+                            catch (Exception ex)
+                            {
+                                AddToOutput($"🔍 SetupProject internal error: {ex.GetType().Name}: {ex.Message}", LogSeverity.DEBUG);
+                                throw; // Re-throw to be caught by outer try-catch
+                            }
+                        }, timeoutCts.Token);
+                        
+                        AddToOutput($"✓ Jira project setup completed for: {_currentProject.JiraProject}", LogSeverity.INFO);
+                    }
+                    catch (OperationCanceledException) when (timeoutCts?.Token.IsCancellationRequested == true)
+                    {
+                        AddToOutput($"⚠️ Jira project setup timed out after 30 seconds - server may be slow or unreachable", LogSeverity.WARNING);
+                        AddToOutput($"💡 Try checking if {_currentProject.JiraServer} is accessible in your browser", LogSeverity.INFO);
+                        return; // Exit early if project setup fails
+                    }
+                    catch (HttpRequestException httpEx) when (httpEx.Message.Contains("404"))
+                    {
+                        AddToOutput($"⚠️ Jira project '{_currentProject.JiraProject}' not found on server {_currentProject.JiraServer} (404)", LogSeverity.WARNING);
+                        AddToOutput($"💡 Please verify the project key is correct and you have access to it", LogSeverity.INFO);
+                        return; // Exit early if project setup fails
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        AddToOutput($"⚠️ Jira project setup was cancelled or timed out - server may be slow or unreachable", LogSeverity.WARNING);
+                        return; // Exit early if project setup fails
+                    }
+                    catch (Exception ex)
+                    {
+                        AddToOutput($"⚠️ Error during Jira project setup: {ex.GetType().Name}: {ex.Message}", LogSeverity.WARNING);
+                        if (ex.InnerException != null)
+                        {
+                            AddToOutput($"⚠️ Inner exception: {ex.InnerException.Message}", LogSeverity.WARNING);
+                        }
+                        AddToOutput($"💡 Check if you can access {_currentProject.JiraServer} directly in a browser", LogSeverity.INFO);
+                        return; // Exit early if project setup fails
+                    }
+                }
+                else
+                {
+                    AddToOutput("⚠️ JiraApi or project became null during initialization", LogSeverity.WARNING);
+                    return;
+                }
+                
+                // Create or get Epic ticket
+                if (!string.IsNullOrEmpty(_currentProject.JiraEpic) && _jiraApi != null && _currentProject != null)
+                {
+                    AddToOutput($"Creating/getting Epic ticket: {_currentProject.JiraEpic}");
+                    try
+                    {
+                        _jiraEpicTicket = await _jiraApi.GetOrCreateEpic(_currentProject.JiraProject, _currentProject.JiraEpic);
+                        if (_jiraEpicTicket != null)
+                        {
+                            AddToOutput($"✓ Epic ticket ready: {_currentProject.JiraEpic}", LogSeverity.INFO);
+                        }
+                        else
+                        {
+                            AddToOutput($"⚠ Failed to create/get Epic ticket: {_currentProject.JiraEpic}", LogSeverity.WARNING);
+                        }
+                    }
+                    catch (HttpRequestException httpEx) when (httpEx.Message.Contains("404"))
+                    {
+                        AddToOutput($"⚠️ Epic '{_currentProject.JiraEpic}' not found - it may need to be created manually", LogSeverity.WARNING);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        AddToOutput($"⚠️ Epic creation timed out - server may be slow", LogSeverity.WARNING);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddToOutput($"⚠️ Error creating/getting Epic ticket: {ex.GetType().Name}: {ex.Message}", LogSeverity.WARNING);
+                    }
+                }
+                
+                // Create or get Story ticket  
+                if (!string.IsNullOrEmpty(_currentProject?.JiraStory) && _jiraApi != null && _currentProject != null)
+                {
+                    AddToOutput($"Creating/getting Story ticket: {_currentProject.JiraStory}");
+                    try
+                    {
+                        // First create/get Epic to use as epicLink
+                        string epicTicketKey = _jiraEpicTicket != null ? _jiraApi.GetIssueKey(_jiraEpicTicket) : _currentProject.JiraEpic;
+                        _jiraStoryTicket = await _jiraApi.GetOrCreateStory(_currentProject.JiraProject, _currentProject.JiraStory, _currentProject.JiraStory, epicTicketKey);
+                        if (_jiraStoryTicket != null)
+                        {
+                            AddToOutput($"✓ Story ticket ready: {_currentProject.JiraStory}", LogSeverity.INFO);
+                        }
+                        else
+                        {
+                            AddToOutput($"⚠ Failed to create/get Story ticket: {_currentProject.JiraStory}", LogSeverity.WARNING);
+                        }
+                    }
+                    catch (HttpRequestException httpEx) when (httpEx.Message.Contains("404"))
+                    {
+                        AddToOutput($"⚠️ Story '{_currentProject.JiraStory}' not found - it may need to be created manually", LogSeverity.WARNING);
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        AddToOutput($"⚠️ Story creation timed out - server may be slow", LogSeverity.WARNING);
+                    }
+                    catch (Exception ex)
+                    {
+                        AddToOutput($"⚠️ Error creating/getting Story ticket: {ex.GetType().Name}: {ex.Message}", LogSeverity.WARNING);
+                    }
+                }
+                
+                // Provide comprehensive status summary
+                var successCount = 0;
+                if (_jiraApi != null) successCount++;
+                if (_jiraEpicTicket != null) successCount++;
+                if (_jiraStoryTicket != null) successCount++;
+                
+                if (successCount == 3)
+                {
+                    AddToOutput("🎉 JiraApi setup completed successfully - all components ready!", LogSeverity.INFO);
+                }
+                else if (successCount > 0)
+                {
+                    AddToOutput($"⚠️ JiraApi partially configured ({successCount}/3 components ready)", LogSeverity.WARNING);
+                }
+                else
+                {
+                    AddToOutput("❌ JiraApi setup failed - no components configured", LogSeverity.ERROR);
+                }
+            }
+            else
+            {
+                // Provide specific diagnostics about what's missing
+                var missing = new List<string>();
+                if (_currentProject == null) missing.Add("project");
+                if (string.IsNullOrEmpty(_currentProject?.JiraServer)) missing.Add("JiraServer");
+                if (_authenticatedHttpClient == null) missing.Add("authenticated HttpClient");
+                if (string.IsNullOrEmpty(_currentProject?.JiraProject)) missing.Add("JiraProject");
+                
+                // Note: Using authenticated HttpClient instead of user/password with JiraAPI v1.0.2
+                var authType = string.IsNullOrEmpty(_httpPassword) ? "Windows auth" : "Basic auth";
+                AddToOutput($"⚠️ Cannot create JiraApi - Missing: {string.Join(", ", missing)} (Auth type: {authType})", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error creating JiraApi or setting up tickets: {ex.Message}", LogSeverity.ERROR);
+            // Clean up on error
+            _jiraApi?.Dispose();
+            _jiraApi = null;
+            _jiraEpicTicket = null;
+            _jiraStoryTicket = null;
+        }
+    }
+
+    /// <summary>
+    /// Gets the current JiraApi instance
+    /// </summary>
+    public JiraApi? GetJiraApi() => _jiraApi;
+
+    /// <summary>
+    /// Gets the current Jira Epic ticket
+    /// </summary>
+    public JsonNode? GetJiraEpicTicket() => _jiraEpicTicket;
+
+    /// <summary>
+    /// Gets the current Jira Story ticket
+    /// </summary>
+    public JsonNode? GetJiraStoryTicket() => _jiraStoryTicket;
+
+    /// <summary>
     /// Clears the stored HTTP authentication
     /// </summary>
     public void ClearHttpAuthentication()
     {
         _authenticatedHttpClient?.Dispose();
         _authenticatedHttpClient = null;
-        AddToOutput("HTTP authentication cleared");
+        _jiraApi?.Dispose();
+        _jiraApi = null;
+        _jiraEpicTicket = null;
+        _jiraStoryTicket = null;
+        _httpUsername = string.Empty;
+        _httpPassword = string.Empty;
+        AddToOutput("HTTP authentication and JiraApi cleared");
+    }
+
+    /// <summary>
+    /// Ensures HTTP authentication is available for the current project if needed
+    /// </summary>
+    private async Task EnsureHttpAuthenticationForProject()
+    {
+        // Check if the project requires HTTP authentication
+        if (!RequiresHttpAuthentication())
+        {
+            return; // No authentication needed
+        }
+
+        // If we already have a valid HTTP client, check if it's still working
+        if (_authenticatedHttpClient != null)
+        {
+            try
+            {
+                // Try to make a simple request to test if authentication is still valid
+                string? testUrl = !string.IsNullOrEmpty(_currentProject?.HttpServerUrl) 
+                    ? _currentProject.HttpServerUrl 
+                    : _currentProject?.HvpTop;
+
+                if (!string.IsNullOrEmpty(testUrl))
+                {
+                    var response = await _authenticatedHttpClient.GetAsync(testUrl);
+                    if (response.IsSuccessStatusCode)
+                    {
+                        AddToOutput("✓ Existing HTTP authentication is still valid");
+                        return; // Authentication is still good
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"⚠️ HTTP authentication test failed: {ex.Message}");
+            }
+        }
+
+        // Authentication failed or doesn't exist, prompt for re-authentication
+        AddToOutput("🔐 HTTP authentication required for this project");
+        await PromptForHttpAuthentication();
+    }
+
+    /// <summary>
+    /// Prompts the user for HTTP authentication
+    /// </summary>
+    private async Task PromptForHttpAuthentication()
+    {
+        try
+        {
+            string serverUrl = !string.IsNullOrEmpty(_currentProject?.HttpServerUrl) 
+                ? _currentProject.HttpServerUrl 
+                : _currentProject?.HvpTop ?? "";
+
+            if (string.IsNullOrEmpty(serverUrl))
+            {
+                AddToOutput("❌ No server URL configured for authentication");
+                return;
+            }
+
+            AddToOutput($"🔐 Attempting authentication for: {serverUrl}");
+
+            // Try Windows authentication first
+            var (windowsSuccess, windowsHttpClient) = await TryWindowsAuthentication(serverUrl);
+            if (windowsSuccess && windowsHttpClient != null)
+            {
+                SetHttpAuthentication(windowsHttpClient);
+                AddToOutput("✓ Windows authentication successful");
+                return;
+            }
+
+            // If Windows auth failed, prompt for credentials
+            string defaultUsername = Environment.UserName ?? "";
+            var (success, httpClient, rememberCredentials, username, password) = HttpAuthDialog.GetHttpAuthentication(
+                this, serverUrl, defaultUsername);
+
+            if (success && httpClient != null)
+            {
+                // Store credentials and set HTTP authentication
+                _httpUsername = username;
+                _httpPassword = password;
+                SetHttpAuthentication(httpClient);
+                
+                // Create JiraApi object for manual authentication (LoadProjectData handles it for project loading)
+                CreateJiraApiObject();
+                AddToOutput("✓ HTTP authentication successful");
+            }
+            else
+            {
+                AddToOutput("❌ HTTP authentication cancelled or failed");
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Error during HTTP authentication: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle manual HTTP authentication menu click
+    /// </summary>
+    private async void HttpAuthentication_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Clear existing authentication first
+            ClearHttpAuthentication();
+            
+            // Prompt for new authentication
+            await PromptForHttpAuthentication();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error during manual HTTP authentication: {ex.Message}", LogSeverity.ERROR);
+        }
     }
 
     /// <summary>
@@ -1757,8 +2839,20 @@ public partial class MainWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
-        // Clean up HTTP client
+        // Clean up HTTP client and JiraApi
         _authenticatedHttpClient?.Dispose();
+        _jiraApi?.Dispose();
+        
+        // Clean up Jira browser event handlers
+        if (_currentJiraNavigationHandler != null && JiraBrowser?.CoreWebView2 != null)
+        {
+            JiraBrowser.CoreWebView2.NavigationCompleted -= _currentJiraNavigationHandler;
+        }
+        if (_currentJiraDOMHandler != null && JiraBrowser?.CoreWebView2 != null)
+        {
+            JiraBrowser.CoreWebView2.DOMContentLoaded -= _currentJiraDOMHandler;
+        }
+        
         base.OnClosed(e);
     }
 
@@ -1768,15 +2862,312 @@ public partial class MainWindow : Window
     private void Cut_Click(object sender, RoutedEventArgs e) => AddToOutput("Cut clicked");
     private void Copy_Click(object sender, RoutedEventArgs e) => AddToOutput("Copy clicked");
     private void Paste_Click(object sender, RoutedEventArgs e) => AddToOutput("Paste clicked");
-    private void ToggleSolutionExplorer_Click(object sender, RoutedEventArgs e) => AddToOutput("Toggle Solution Explorer clicked");
-    private void ToggleOutput_Click(object sender, RoutedEventArgs e) => AddToOutput("Toggle Output clicked");
+    private void ToggleSolutionExplorer_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = FindName("SolutionExplorerPanel") as Border;
+        if (panel != null)
+        {
+            panel.Visibility = panel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            AddToOutput($"Solution Explorer {(panel.Visibility == Visibility.Visible ? "shown" : "hidden")}");
+        }
+    }
+    
+    private void ToggleOutput_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var dockingManager = DockingManager;
+            if (dockingManager?.Layout == null)
+            {
+                AddToOutput("⚠️ DockingManager not found", LogSeverity.WARNING);
+                return;
+            }
+
+            var outputAnchorable = FindAnchorableByContentId(dockingManager.Layout.RootPanel, "Output");
+            if (outputAnchorable != null)
+            {
+                if (outputAnchorable.IsHidden || outputAnchorable.IsAutoHidden)
+                {
+                    // Always show the Output panel when it's hidden or minimized
+                    if (outputAnchorable.IsHidden)
+                    {
+                        outputAnchorable.Show();
+                    }
+                    if (outputAnchorable.IsAutoHidden)
+                    {
+                        outputAnchorable.ToggleAutoHide();
+                    }
+                    outputAnchorable.IsActive = true;
+                    AddToOutput("✓ Output window restored and activated");
+                }
+                else
+                {
+                    // Only hide if it's currently fully visible
+                    outputAnchorable.Hide();
+                    AddToOutput("✓ Output window hidden");
+                }
+            }
+            else
+            {
+                AddToOutput("⚠️ Output panel not found", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error toggling output: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
     private void ToggleErrorList_Click(object sender, RoutedEventArgs e) => AddToOutput("Toggle Error List clicked");
+    
+    private void ResetLayout_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Reset AvalonDock layout to default configuration
+            ResetDockingLayout();
+            
+            AddToOutput("🔄 Layout has been reset to default configuration", LogSeverity.INFO);
+            MessageBox.Show("Layout has been successfully reset to default configuration.", "Layout Reset", 
+                          MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Error resetting layout: {ex.Message}", LogSeverity.ERROR);
+            MessageBox.Show($"Failed to reset layout: {ex.Message}", "Layout Reset Error", 
+                          MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
+    /// <summary>
+    /// Reset the AvalonDock layout to default configuration
+    /// </summary>
+    private void ResetDockingLayout()
+    {
+        try
+        {
+            // Get the DockingManager
+            var dockingManager = DockingManager;
+            if (dockingManager?.Layout == null)
+            {
+                AddToOutput("⚠️ DockingManager or Layout not found", LogSeverity.WARNING);
+                return;
+            }
+
+            // Simple and reliable reset approach
+            ResetLayoutBasic(dockingManager);
+
+            AddToOutput("✅ AvalonDock layout reset completed", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Error in ResetDockingLayout: {ex.Message}", LogSeverity.ERROR);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Basic layout reset that focuses on essential operations
+    /// </summary>
+    private void ResetLayoutBasic(Xceed.Wpf.AvalonDock.DockingManager dockingManager)
+    {
+        try
+        {
+            // Simple approach: Reset any floating windows and ensure visibility
+            ResetFloatingWindows(dockingManager);
+            
+            // Show any hidden panels
+            RestoreDefaultVisibility(dockingManager);
+
+            AddToOutput("✅ Basic layout reset operations completed", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error in basic layout reset: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+
+    /// <summary>
+    /// Reset floating windows back to docked state
+    /// </summary>
+    private void ResetFloatingWindows(Xceed.Wpf.AvalonDock.DockingManager dockingManager)
+    {
+        try
+        {
+            // Get all floating windows and dock them
+            var floatingWindows = dockingManager.Layout.FloatingWindows.ToList();
+            
+            foreach (var floatingWindow in floatingWindows)
+            {
+                try
+                {
+                    // Find anchorables in this floating window and dock them
+                    if (floatingWindow is Xceed.Wpf.AvalonDock.Layout.LayoutAnchorableFloatingWindow anchorableWindow)
+                    {
+                        var anchorables = new List<Xceed.Wpf.AvalonDock.Layout.LayoutAnchorable>();
+                        CollectAnchorables(anchorableWindow, anchorables);
+                        
+                        foreach (var anchorable in anchorables)
+                        {
+                            if (anchorable.IsFloating)
+                            {
+                                anchorable.Dock();
+                                AddToOutput($"✅ Docked floating panel: {anchorable.ContentId}", LogSeverity.INFO);
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"⚠️ Error docking floating window: {ex.Message}", LogSeverity.WARNING);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error resetting floating windows: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+
+    /// <summary>
+    /// Collect all anchorable elements from a layout element
+    /// </summary>
+    private void CollectAnchorables(Xceed.Wpf.AvalonDock.Layout.ILayoutElement element, List<Xceed.Wpf.AvalonDock.Layout.LayoutAnchorable> anchorables)
+    {
+        if (element is Xceed.Wpf.AvalonDock.Layout.LayoutAnchorable anchorable)
+        {
+            anchorables.Add(anchorable);
+        }
+        else if (element is Xceed.Wpf.AvalonDock.Layout.ILayoutContainer container)
+        {
+            foreach (var child in container.Children)
+            {
+                CollectAnchorables(child, anchorables);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Restore default visibility for key layout elements
+    /// </summary>
+    private void RestoreDefaultVisibility(Xceed.Wpf.AvalonDock.DockingManager dockingManager)
+    {
+        try
+        {
+            // Show any hidden anchorables
+            var hiddenAnchorables = dockingManager.Layout.Hidden.ToList();
+            
+            foreach (var hiddenAnchorable in hiddenAnchorables)
+            {
+                try
+                {
+                    if (hiddenAnchorable.IsHidden)
+                    {
+                        hiddenAnchorable.Show();
+                        AddToOutput($"✅ Restored hidden panel: {hiddenAnchorable.ContentId}", LogSeverity.INFO);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"⚠️ Error showing hidden panel {hiddenAnchorable.ContentId}: {ex.Message}", LogSeverity.WARNING);
+                }
+            }
+
+            // Clean up layout
+            try
+            {
+                dockingManager.Layout.CollectGarbage();
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"⚠️ Warning during layout cleanup: {ex.Message}", LogSeverity.WARNING);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error restoring default visibility: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+    
     private void SetLightTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Light theme selected");
     private void SetDarkTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Dark theme selected");
     private void RunCoverageAnalysis_Click(object sender, RoutedEventArgs e) => AddToOutput("Run Coverage Analysis clicked");
     private void CreateJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Create Jira clicked");
-    private void Options_Click(object sender, RoutedEventArgs e) => AddToOutput("Options clicked");
+    private void AddToWaiver_Click(object sender, RoutedEventArgs e) => AddToOutput("Add to Waiver clicked");
+    private void Options_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Load current global settings
+            var appSettings = AppSettings.Load();
+            var settingsDialog = new SettingsDialog(appSettings.JiraServer, appSettings.JiraProject)
+            {
+                Owner = this
+            };
+            
+            if (settingsDialog.ShowDialog() == true)
+            {
+                // Update global settings
+                appSettings.JiraServer = settingsDialog.JiraServer;
+                appSettings.JiraProject = settingsDialog.JiraProject;
+                appSettings.Save();
+                AddToOutput($"Global Jira settings updated - Server: {appSettings.JiraServer}, Project: {appSettings.JiraProject}");
+                
+                // Update current project if loaded
+                if (_currentProject != null)
+                {
+                    _currentProject.JiraServer = settingsDialog.JiraServer;
+                    _currentProject.JiraProject = settingsDialog.JiraProject;
+                    _currentProject.Save();
+                    AddToOutput($"Current project Jira settings updated");
+                    
+                    // Update project info display
+                    UpdateProjectStatusBar();
+                }
+                else
+                {
+                    AddToOutput("Settings will be applied to new projects.");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error opening settings dialog: {ex.Message}");
+        }
+    }
     private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show("Coverage Analyzer GUI\nVersion 1.0", "About");
+
+    // Context Menu Event Handlers
+    private void ContextMenu_CreateJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Create Jira clicked");
+    private void ContextMenu_ShowJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Show Jira clicked");
+    private void ContextMenu_AddToWaiver_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Add to Waiver clicked");
+    
+    private void ContextMenu_ClearSelection_Click(object sender, RoutedEventArgs e)
+    {
+        ClearMultiSelection();
+        AddToOutput("Context Menu: Clear Selection - all checkboxes cleared");
+    }
+
+    // Dockable Panel Management
+    private void HideSolutionExplorerPanel_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = FindName("SolutionExplorerPanel") as Border;
+        if (panel != null)
+        {
+            panel.Visibility = panel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            AddToOutput($"Solution Explorer panel {(panel.Visibility == Visibility.Visible ? "shown" : "hidden")}");
+        }
+    }
+
+    private void HideOutputPanel_Click(object sender, RoutedEventArgs e)
+    {
+        var panel = FindName("OutputPanel") as Border;
+        if (panel != null)
+        {
+            panel.Visibility = panel.Visibility == Visibility.Visible ? Visibility.Collapsed : Visibility.Visible;
+            AddToOutput($"Output panel {(panel.Visibility == Visibility.Visible ? "shown" : "hidden")}");
+        }
+    }
 
     /// <summary>
     /// Automatically load HVP data when project is created or opened
@@ -1869,15 +3260,15 @@ public partial class MainWindow : Window
                         // Ensure UI update happens on UI thread
                         if (Dispatcher.CheckAccess())
                         {
-                            SolutionExplorer.Items.Clear();
-                            SolutionExplorer.ItemsSource = treeItems;
+                            HvpTreeView.Items.Clear();
+                            HvpTreeView.ItemsSource = treeItems;
                             AddToOutput($"✓ Auto-loaded {treeItems.Count} items in TreeView");
                         }
                         else
                         {
                             Dispatcher.Invoke(() => {
-                                SolutionExplorer.Items.Clear();
-                                SolutionExplorer.ItemsSource = treeItems;
+                                HvpTreeView.Items.Clear();
+                                HvpTreeView.ItemsSource = treeItems;
                                 AddToOutput($"✓ Auto-loaded {treeItems.Count} items in TreeView");
                             });
                         }
@@ -2074,16 +3465,16 @@ public partial class MainWindow : Window
                             if (Dispatcher.CheckAccess())
                             {
                                 // Clear existing items before setting ItemsSource
-                                SolutionExplorer.Items.Clear();
-                                SolutionExplorer.ItemsSource = treeItems;
+                                HvpTreeView.Items.Clear();
+                                HvpTreeView.ItemsSource = treeItems;
                                 // TreeView populated successfully
                             }
                             else
                             {
                                 Dispatcher.Invoke(() => {
                                     // Clear existing items before setting ItemsSource
-                                    SolutionExplorer.Items.Clear();
-                                    SolutionExplorer.ItemsSource = treeItems;
+                                    HvpTreeView.Items.Clear();
+                                    HvpTreeView.ItemsSource = treeItems;
                                     // TreeView populated successfully
                                 });
                             }
@@ -2264,7 +3655,7 @@ public partial class MainWindow : Window
         var failCountProperty = nodeType.GetProperty("FailCount");
         var warnCountProperty = nodeType.GetProperty("WarnCount");
         var assertCountProperty = nodeType.GetProperty("AssertCount");
-        var assertProperty = nodeType.GetProperty("ASSERT");
+        var assertProperty = nodeType.GetProperty("AssertScore");
         var unknownCountProperty = nodeType.GetProperty("UnknownCount");
         var childrenProperty = nodeType.GetProperty("Children");
         var linkProperty = nodeType.GetProperty("Link");
@@ -2276,7 +3667,12 @@ public partial class MainWindow : Window
         var pathProperty = nodeType.GetProperty("Path");
         var filePathProperty = nodeType.GetProperty("FilePath");
         
-        // Root node analysis removed for performance
+        // Debug: Log available properties for root node
+        if (isRoot)
+        {
+            AddToOutput($"🔍 Debug - Root node type: {nodeType.Name}", LogSeverity.INFO);
+            AddToOutput($"🔍 Debug - Available properties: {string.Join(", ", nodeType.GetProperties().Select(p => p.Name))}", LogSeverity.INFO);
+        }
         
         // Get node values
         string nodeName;
@@ -2317,27 +3713,47 @@ public partial class MainWindow : Window
         
         // Score debugging removed for performance
         
-        // Create table row structure as Header - with separator column
+        // Create table row structure as Header - with separator column and reduced widths
         var tableRow = new Grid();
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(234) }); // Name
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(200) }); // Name - reduced from 234
         tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1) });   // Separator
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Score
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(100) }); // GroupScore
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(80) });  // Assert Score
-        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });  // Tests Score
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(65) });  // Score - reduced from 80
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(65) });  // Group - reduced from 100
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(65) });  // Assert - reduced from 80
+        tableRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(65) });  // Test - reduced from 90
         
-        // Name column with depth-based indentation
-        var indentString = new string(' ', depth * 4); // 4 spaces per level
+        // Name column with checkbox and depth-based indentation
+        var namePanel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        
+        // Add indentation
+        if (depth > 0)
+        {
+            var spacer = new Border { Width = depth * 16 }; // 16 pixels per level
+            namePanel.Children.Add(spacer);
+        }
+        
+        // Add checkbox
+        var checkbox = new CheckBox 
+        { 
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, 0, 5, 0)
+        };
+        checkbox.Checked += TreeViewItem_Checked;
+        checkbox.Unchecked += TreeViewItem_Unchecked;
+        namePanel.Children.Add(checkbox);
+        
+        // Add name text
         var nameText = new TextBlock 
         { 
-            Text = indentString + nodeName, 
+            Text = nodeName, 
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(4, 2, 4, 2),
+            Padding = new Thickness(0, 1, 2, 1),
             Foreground = new SolidColorBrush(Colors.Black)
         };
-        Grid.SetColumn(nameText, 0);
-        tableRow.Children.Add(nameText);
+        namePanel.Children.Add(nameText);
+        
+        Grid.SetColumn(namePanel, 0);
+        tableRow.Children.Add(namePanel);
         
         // Separator line
         var separator = new Border
@@ -2355,8 +3771,8 @@ public partial class MainWindow : Window
         { 
             Text = score is double scoreVal ? $"{scoreVal:F1}%" : "",
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(2, 1, 2, 1),
             FontFamily = new FontFamily("Consolas")
         };
         if (score is double scoreDouble)
@@ -2377,8 +3793,8 @@ public partial class MainWindow : Window
         { 
             Text = groupScore is double groupScoreVal ? $"{groupScoreVal:F1}%" : "",
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(2, 1, 2, 1),
             FontFamily = new FontFamily("Consolas")
         };
         if (groupScore is double groupScoreDouble)
@@ -2398,8 +3814,8 @@ public partial class MainWindow : Window
         var assertScoreText = new TextBlock 
         { 
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(2, 1, 2, 1),
             FontFamily = new FontFamily("Consolas")
         };
         
@@ -2409,18 +3825,13 @@ public partial class MainWindow : Window
             double assertPercentage = 0.0;
             bool isValidPercentage = false;
             
-            // Try to parse ASSERT value as percentage
-            if (assertValue is double directDouble)
+            // Debug for root node
+            if (isRoot)
             {
-                assertPercentage = directDouble;
-                isValidPercentage = true;
+                AddToOutput($"🔍 Root ASSERT value: {assertValue} (Type: {assertValue.GetType().Name})", LogSeverity.ERROR);
             }
-            else if (assertValue is float directFloat)
-            {
-                assertPercentage = directFloat;
-                isValidPercentage = true;
-            }
-            else if (assertValue is string assertString && !string.IsNullOrEmpty(assertString))
+            
+            if (assertValue is string assertString && !string.IsNullOrEmpty(assertString))
             {
                 // Try to parse string as double, handle both decimal separators
                 var normalizedString = assertString.Replace(',', '.');
@@ -2429,11 +3840,6 @@ public partial class MainWindow : Window
                     assertPercentage = parsedValue;
                     isValidPercentage = true;
                 }
-            }
-            else if (assertValue is int assertInt)
-            {
-                assertPercentage = assertInt;
-                isValidPercentage = true;
             }
             
             if (isValidPercentage)
@@ -2450,26 +3856,13 @@ public partial class MainWindow : Window
                 assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
             }
         }
-        else if (assertCount != null)
-        {
-            // If no ASSERT property but assertCount exists, try to convert it
-            if (assertCount is int assertCountInt && assertCountInt >= 0)
-            {
-                // If assertCount is available, treat it as a percentage value
-                double assertPercentage = assertCountInt;
-                assertScoreText.Text = $"{assertPercentage:F1}%";
-                var colorStyle = CoverageColorMapping.GetColorStyleForPercentage(assertPercentage);
-                assertScoreText.Foreground = colorStyle.Foreground;
-                assertScoreText.Background = colorStyle.Background;
-            }
-            else
-            {
-                assertScoreText.Text = assertCount.ToString() ?? "";
-                assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
-            }
-        }
         else
         {
+            // Debug for root node when no ASSERT data found
+            if (isRoot)
+            {
+                AddToOutput($"❌ Root node: No ASSERT or AssertCount found", LogSeverity.WARNING);
+            }
             assertScoreText.Text = "";
             assertScoreText.Foreground = new SolidColorBrush(Colors.Black);
         }
@@ -2481,8 +3874,8 @@ public partial class MainWindow : Window
         var testsScoreText = new TextBlock 
         { 
             VerticalAlignment = VerticalAlignment.Center,
-            HorizontalAlignment = HorizontalAlignment.Right,
-            Padding = new Thickness(4, 2, 4, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Padding = new Thickness(2, 1, 2, 1),
             FontFamily = new FontFamily("Consolas")
         };
         
@@ -2702,8 +4095,8 @@ public partial class MainWindow : Window
             var treeScrollViewer = FindName("TreeScrollViewer") as ScrollViewer;
             if (treeScrollViewer != null)
             {
-                // Calculate scroll amount (3 lines per wheel click is typical)
-                double scrollAmount = -e.Delta / 40.0; // Standard scroll amount
+                // Calculate scroll amount (increased for faster scrolling)
+                double scrollAmount = -e.Delta / 3.0; // Faster scroll: ~8 lines per wheel click
                 
                 // Scroll vertically
                 treeScrollViewer.ScrollToVerticalOffset(treeScrollViewer.VerticalOffset + scrollAmount);
@@ -2721,7 +4114,7 @@ public partial class MainWindow : Window
     /// <summary>
     /// Handle TreeView selection changes to navigate to the associated report
     /// </summary>
-    private void SolutionExplorer_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    private void HvpTreeView_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         try
         {
@@ -3377,4 +4770,873 @@ public partial class MainWindow : Window
             AddToOutput($"Error navigating to URL: {ex.Message}", LogSeverity.ERROR);
         }
     }
+
+    /// <summary>
+    /// Handle TreeViewItem checkbox checked event with parent-child cascading
+    /// </summary>
+    private void TreeViewItem_Checked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is CheckBox checkBox && 
+                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            {
+                _selectedTreeViewItems.Add(treeViewItem);
+                
+                // Try to get the associated HierarchyNode
+                HierarchyNode? node = null;
+                if (treeViewItem.DataContext is HierarchyNode dataNode)
+                {
+                    node = dataNode;
+                }
+                else if (treeViewItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
+                {
+                    node = gridNode;
+                }
+
+                if (node != null)
+                {
+                    _selectedNodes.Add(node);
+                    AddToOutput($"✅ Selected: {node.Name} (Total: {_selectedNodes.Count})", LogSeverity.INFO);
+                    
+                    // Check all child nodes
+                    CheckAllChildNodes(treeViewItem, true);
+                }
+                
+                UpdateMultiSelectionStatus();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling checkbox selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle TreeViewItem checkbox unchecked event with parent-child cascading
+    /// </summary>
+    private void TreeViewItem_Unchecked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is CheckBox checkBox && 
+                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            {
+                _selectedTreeViewItems.Remove(treeViewItem);
+                
+                // Try to get the associated HierarchyNode
+                HierarchyNode? node = null;
+                if (treeViewItem.DataContext is HierarchyNode dataNode)
+                {
+                    node = dataNode;
+                }
+                else if (treeViewItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
+                {
+                    node = gridNode;
+                }
+
+                if (node != null)
+                {
+                    _selectedNodes.Remove(node);
+                    AddToOutput($"❌ Deselected: {node.Name} (Total: {_selectedNodes.Count})", LogSeverity.INFO);
+                    
+                    // Uncheck all child nodes
+                    CheckAllChildNodes(treeViewItem, false);
+                }
+                
+                UpdateMultiSelectionStatusCombined();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling checkbox deselection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Update the status bar with multi-selection information
+    /// </summary>
+    private void UpdateMultiSelectionStatus()
+    {
+        if (_selectedNodes.Count > 0)
+        {
+            StatusText.Text = $"Multi-Selection: {_selectedNodes.Count} nodes selected";
+        }
+        else
+        {
+            StatusText.Text = "Ready";
+        }
+    }
+
+    /// <summary>
+    /// Check or uncheck all child nodes recursively
+    /// </summary>
+    private void CheckAllChildNodes(TreeViewItem parentItem, bool isChecked)
+    {
+        try
+        {
+            foreach (TreeViewItem childItem in parentItem.Items.OfType<TreeViewItem>())
+            {
+                // Find the checkbox in the child item
+                var checkbox = FindVisualChild<CheckBox>(childItem);
+                if (checkbox != null && checkbox.IsChecked != isChecked)
+                {
+                    // Temporarily remove event handlers to prevent recursive calls
+                    checkbox.Checked -= TreeViewItem_Checked;
+                    checkbox.Unchecked -= TreeViewItem_Unchecked;
+                    
+                    checkbox.IsChecked = isChecked;
+                    
+                    // Update selection tracking
+                    if (isChecked)
+                    {
+                        _selectedTreeViewItems.Add(childItem);
+                        if (childItem.DataContext is HierarchyNode node)
+                        {
+                            _selectedNodes.Add(node);
+                        }
+                        else if (childItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
+                        {
+                            _selectedNodes.Add(gridNode);
+                        }
+                    }
+                    else
+                    {
+                        _selectedTreeViewItems.Remove(childItem);
+                        if (childItem.DataContext is HierarchyNode node)
+                        {
+                            _selectedNodes.Remove(node);
+                        }
+                        else if (childItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
+                        {
+                            _selectedNodes.Remove(gridNode);
+                        }
+                    }
+                    
+                    // Re-attach event handlers
+                    checkbox.Checked += TreeViewItem_Checked;
+                    checkbox.Unchecked += TreeViewItem_Unchecked;
+                    
+                    // Recursively check children
+                    CheckAllChildNodes(childItem, isChecked);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error checking child nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Helper method to find visual child of specific type
+    /// </summary>
+    private T? FindVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is T result)
+            {
+                return result;
+            }
+            
+            var childOfChild = FindVisualChild<T>(child);
+            if (childOfChild != null)
+            {
+                return childOfChild;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Check or uncheck all Stats child nodes recursively
+    /// </summary>
+    private void CheckAllStatsChildNodes(TreeViewItem parentItem, bool isChecked)
+    {
+        try
+        {
+            foreach (TreeViewItem childItem in parentItem.Items.OfType<TreeViewItem>())
+            {
+                // Find the checkbox in the child item (Stats uses specific name)
+                var checkbox = FindVisualChild<CheckBox>(childItem);
+                if (checkbox != null && checkbox.IsChecked != isChecked)
+                {
+                    // Temporarily remove event handlers to prevent recursive calls
+                    checkbox.Checked -= StatsTreeViewItem_Checked;
+                    checkbox.Unchecked -= StatsTreeViewItem_Unchecked;
+                    
+                    checkbox.IsChecked = isChecked;
+                    
+                    // Update selection tracking
+                    if (isChecked)
+                    {
+                        _selectedStatsTreeViewItems.Add(childItem);
+                        if (childItem.Header != null)
+                        {
+                            _selectedStatsNodes.Add(childItem.Header);
+                        }
+                    }
+                    else
+                    {
+                        _selectedStatsTreeViewItems.Remove(childItem);
+                        if (childItem.Header != null)
+                        {
+                            _selectedStatsNodes.Remove(childItem.Header);
+                        }
+                    }
+                    
+                    // Re-attach event handlers
+                    checkbox.Checked += StatsTreeViewItem_Checked;
+                    checkbox.Unchecked += StatsTreeViewItem_Unchecked;
+                    
+                    // Recursively check children
+                    CheckAllStatsChildNodes(childItem, isChecked);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error checking Stats child nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Get the currently selected nodes for multi-selection operations
+    /// </summary>
+    public IReadOnlySet<HierarchyNode> GetSelectedNodes()
+    {
+        return _selectedNodes.ToHashSet();
+    }
+
+    /// <summary>
+    /// Clear all multi-selections
+    /// </summary>
+    public void ClearMultiSelection()
+    {
+        try
+        {
+            _selectedNodes.Clear();
+            _selectedTreeViewItems.Clear();
+            
+            // Clear selections using data binding approach (for HierarchyNode)
+            ClearHierarchyNodeSelections();
+            
+            // Clear selections using visual tree approach (for TreeViewItem)
+            ClearCheckboxes(HvpTreeView);
+            
+            UpdateMultiSelectionStatus();
+            AddToOutput("🔄 Cleared all selections", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error clearing multi-selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Clear selections for HierarchyNode data binding approach
+    /// </summary>
+    private void ClearHierarchyNodeSelections()
+    {
+        if (HvpTreeView.ItemsSource is IEnumerable<HierarchyNode> hierarchyNodes)
+        {
+            foreach (var node in hierarchyNodes)
+            {
+                ClearHierarchyNodeRecursive(node);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Recursively clear HierarchyNode selections
+    /// </summary>
+    private void ClearHierarchyNodeRecursive(HierarchyNode node)
+    {
+        node.IsSelected = false;
+        foreach (var child in node.Children)
+        {
+            ClearHierarchyNodeRecursive(child);
+        }
+    }
+
+    /// <summary>
+    /// Recursively clear checkboxes in TreeView
+    /// </summary>
+    private void ClearCheckboxes(ItemsControl parent)
+    {
+        for (int i = 0; i < parent.Items.Count; i++)
+        {
+            var container = parent.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                // Try to find checkbox with current name first
+                var checkbox = FindVisualChild<CheckBox>(container, "NodeCheckBox");
+                
+                // Fallback to old name for backwards compatibility
+                if (checkbox == null)
+                {
+                    checkbox = FindVisualChild<CheckBox>(container, "SelectionCheckBox");
+                }
+                
+                // Fallback to finding any checkbox if named search fails
+                if (checkbox == null)
+                {
+                    checkbox = FindAnyVisualChild<CheckBox>(container);
+                }
+                
+                if (checkbox != null)
+                {
+                    checkbox.IsChecked = false;
+                }
+                
+                // Recursively clear children
+                ClearCheckboxes(container);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Find a visual child by name in the visual tree
+    /// </summary>
+    private T? FindVisualChild<T>(DependencyObject parent, string childName) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            
+            if (child is T typedChild && child is FrameworkElement element && element.Name == childName)
+            {
+                return typedChild;
+            }
+            
+            var foundChild = FindVisualChild<T>(child, childName);
+            if (foundChild != null)
+                return foundChild;
+        }
+        return null;
+    }
+    
+    /// <summary>
+    /// Find any visual child of the specified type in the visual tree
+    /// </summary>
+    private T? FindAnyVisualChild<T>(DependencyObject parent) where T : DependencyObject
+    {
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            
+            if (child is T typedChild)
+            {
+                return typedChild;
+            }
+            
+            var foundChild = FindAnyVisualChild<T>(child);
+            if (foundChild != null)
+                return foundChild;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Handle Clear All Selections menu click
+    /// </summary>
+    private void ClearAllSelections_Click(object sender, RoutedEventArgs e)
+    {
+        ClearMultiSelection();
+    }
+
+    /// <summary>
+    /// Handle Select All menu click
+    /// </summary>
+    private void SelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectAllNodes(HvpTreeView);
+            AddToOutput($"🎯 Selected all nodes (Total: {_selectedNodes.Count})", LogSeverity.INFO);
+            UpdateMultiSelectionStatus();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error selecting all nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Export Selected Nodes menu click
+    /// </summary>
+    private void ExportSelectedNodes_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_selectedNodes.Count == 0)
+            {
+                MessageBox.Show("No nodes selected for export.", "Export Selected Nodes", 
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+
+            var saveDialog = new SaveFileDialog
+            {
+                Filter = "JSON files (*.json)|*.json|Text files (*.txt)|*.txt|All files (*.*)|*.*",
+                DefaultExt = "json",
+                FileName = "selected_nodes.json"
+            };
+
+            if (saveDialog.ShowDialog() == true)
+            {
+                var exportData = _selectedNodes.Select(node => new
+                {
+                    Name = node.Name,
+                    FullPath = node.FullPath,
+                    Link = node.Link,
+                    CoveragePercentage = node.CoveragePercentage,
+                    LinesCovered = node.LinesCovered,
+                    TotalLines = node.TotalLines
+                }).ToArray();
+
+                string json = System.Text.Json.JsonSerializer.Serialize(exportData, new System.Text.Json.JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                File.WriteAllText(saveDialog.FileName, json);
+                AddToOutput($"📄 Exported {_selectedNodes.Count} selected nodes to {saveDialog.FileName}", LogSeverity.INFO);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error exporting selected nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Recursively select all nodes in the TreeView
+    /// </summary>
+    private void SelectAllNodes(ItemsControl parent)
+    {
+        for (int i = 0; i < parent.Items.Count; i++)
+        {
+            var container = parent.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                // Find checkbox in the container template
+                var checkbox = FindVisualChild<CheckBox>(container, "SelectionCheckBox");
+                if (checkbox != null)
+                {
+                    checkbox.IsChecked = true;
+                }
+                
+                // Recursively select children
+                SelectAllNodes(container);
+            }
+        }
+    }
+
+    #region Tools Menu Event Handlers
+
+    /// <summary>
+    /// Handle Select All Trees menu click
+    /// </summary>
+    private void SelectAllTrees_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Select all HVP nodes
+            SelectAllNodes(HvpTreeView);
+            
+            // Select all Stats nodes
+            SelectAllStatsNodes(StatsTreeView);
+            
+            AddToOutput($"🎯 Selected all nodes in both trees", LogSeverity.INFO);
+            UpdateMultiSelectionStatusCombined();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error selecting all trees: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Clear All Trees menu click
+    /// </summary>
+    private void ClearAllTrees_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            ClearMultiSelection();
+            ClearStatsMultiSelection();
+            AddToOutput($"🔄 Cleared all selections in both trees", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error clearing all trees: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Select All HVP Nodes menu click
+    /// </summary>
+    private void SelectAllHvpNodes_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectAllNodes(HvpTreeView);
+            AddToOutput($"🎯 Selected all HVP nodes", LogSeverity.INFO);
+            UpdateMultiSelectionStatusCombined();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error selecting all HVP nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Clear HVP Selections menu click
+    /// </summary>
+    private void ClearHvpSelections_Click(object sender, RoutedEventArgs e)
+    {
+        ClearMultiSelection();
+    }
+
+    /// <summary>
+    /// Handle Select All Stats Nodes menu click
+    /// </summary>
+    private void SelectAllStatsNodes_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectAllStatsNodes(StatsTreeView);
+            AddToOutput($"🎯 Selected all Stats nodes", LogSeverity.INFO);
+            UpdateMultiSelectionStatusCombined();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error selecting all Stats nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Clear Stats Selections menu click
+    /// </summary>
+    private void ClearStatsSelections_Click(object sender, RoutedEventArgs e)
+    {
+        ClearStatsMultiSelection();
+    }
+
+    #endregion
+
+    #region Master Checkbox Event Handlers
+
+    /// <summary>
+    /// Handle master HVP checkbox checked
+    /// </summary>
+    private void MasterHvpCheckBox_Checked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectAllNodes(HvpTreeView);
+            AddToOutput($"🎯 Master checkbox: Selected all HVP nodes", LogSeverity.INFO);
+            UpdateMultiSelectionStatusCombined();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error in master HVP checkbox: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle master HVP checkbox unchecked
+    /// </summary>
+    private void MasterHvpCheckBox_Unchecked(object sender, RoutedEventArgs e)
+    {
+        ClearMultiSelection();
+    }
+
+    /// <summary>
+    /// Handle master Stats checkbox checked
+    /// </summary>
+    private void MasterStatsCheckBox_Checked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SelectAllStatsNodes(StatsTreeView);
+            AddToOutput($"🎯 Master checkbox: Selected all Stats nodes", LogSeverity.INFO);
+            UpdateMultiSelectionStatusCombined();
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error in master Stats checkbox: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle master Stats checkbox unchecked
+    /// </summary>
+    private void MasterStatsCheckBox_Unchecked(object sender, RoutedEventArgs e)
+    {
+        ClearStatsMultiSelection();
+    }
+
+    #endregion
+
+    #region Stats Tree Multi-Selection
+
+    /// <summary>
+    /// Handle Stats TreeViewItem checkbox checked with parent-child cascading
+    /// </summary>
+    private void StatsTreeViewItem_Checked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is CheckBox checkBox && 
+                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            {
+                _selectedStatsTreeViewItems.Add(treeViewItem);
+                
+                // Store the header content as the selected node
+                if (treeViewItem.Header != null)
+                {
+                    _selectedStatsNodes.Add(treeViewItem.Header);
+                    AddToOutput($"✅ Stats Selected: {treeViewItem.Header} (Total: {_selectedStatsNodes.Count})", LogSeverity.INFO);
+                    
+                    // Check all child nodes
+                    CheckAllStatsChildNodes(treeViewItem, true);
+                }
+                
+                UpdateMultiSelectionStatusCombined();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling Stats checkbox selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Handle Stats TreeViewItem checkbox unchecked with parent-child cascading
+    /// </summary>
+    private void StatsTreeViewItem_Unchecked(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is CheckBox checkBox && 
+                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            {
+                _selectedStatsTreeViewItems.Remove(treeViewItem);
+                
+                if (treeViewItem.Header != null)
+                {
+                    _selectedStatsNodes.Remove(treeViewItem.Header);
+                    AddToOutput($"❌ Stats Deselected: {treeViewItem.Header} (Total: {_selectedStatsNodes.Count})", LogSeverity.INFO);
+                    
+                    // Uncheck all child nodes
+                    CheckAllStatsChildNodes(treeViewItem, false);
+                }
+                
+                UpdateMultiSelectionStatusCombined();
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error handling Stats checkbox deselection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Clear all Stats multi-selections
+    /// </summary>
+    public void ClearStatsMultiSelection()
+    {
+        try
+        {
+            _selectedStatsNodes.Clear();
+            _selectedStatsTreeViewItems.Clear();
+            
+            // Uncheck all checkboxes in the stats tree
+            ClearStatsCheckboxes(StatsTreeView);
+            
+            UpdateMultiSelectionStatusCombined();
+            AddToOutput("🔄 Cleared all Stats selections", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error clearing Stats multi-selection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    /// <summary>
+    /// Recursively select all nodes in the Stats TreeView
+    /// </summary>
+    private void SelectAllStatsNodes(ItemsControl parent)
+    {
+        for (int i = 0; i < parent.Items.Count; i++)
+        {
+            var container = parent.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                // Find checkbox in the container template
+                var checkbox = FindVisualChild<CheckBox>(container, "StatsSelectionCheckBox");
+                if (checkbox != null)
+                {
+                    checkbox.IsChecked = true;
+                }
+                
+                // Recursively select children
+                SelectAllStatsNodes(container);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Recursively clear checkboxes in Stats TreeView
+    /// </summary>
+    private void ClearStatsCheckboxes(ItemsControl parent)
+    {
+        for (int i = 0; i < parent.Items.Count; i++)
+        {
+            var container = parent.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                // Find checkbox in the container template
+                var checkbox = FindVisualChild<CheckBox>(container, "StatsSelectionCheckBox");
+                if (checkbox != null)
+                {
+                    checkbox.IsChecked = false;
+                }
+                
+                // Recursively clear children
+                ClearStatsCheckboxes(container);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Get the currently selected Stats nodes
+    /// </summary>
+    public IReadOnlySet<object> GetSelectedStatsNodes()
+    {
+        return _selectedStatsNodes.ToHashSet();
+    }
+
+    #endregion
+
+    /// <summary>
+    /// Update the status bar with multi-selection information for both trees
+    /// </summary>
+    protected void UpdateMultiSelectionStatusCombined()
+    {
+        var hvpCount = _selectedNodes.Count;
+        var statsCount = _selectedStatsNodes.Count;
+        
+        if (hvpCount > 0 || statsCount > 0)
+        {
+            StatusText.Text = $"Multi-Selection: {hvpCount} HVP nodes, {statsCount} Stats nodes selected";
+        }
+        else
+        {
+            StatusText.Text = "Ready";
+        }
+    }
+
+    #region Simple Panel Docking - Context Menu Approach
+
+    /// <summary>
+    /// Handle right-click on Solution Explorer header for docking options
+    /// </summary>
+    private void SolutionExplorerHeader_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2) // Double-click to cycle through positions
+        {
+            CycleSolutionExplorerPosition();
+        }
+    }
+
+    /// <summary>
+    /// Handle right-click on Output header for docking options
+    /// </summary>
+    private void OutputHeader_MouseLeftButtonDown(object sender, System.Windows.Input.MouseButtonEventArgs e)
+    {
+        if (e.ClickCount == 2) // Double-click to cycle through positions
+        {
+            CycleOutputPanelPosition();
+        }
+    }
+
+    /// <summary>
+    /// Cycle Solution Explorer through different dock positions
+    /// </summary>
+    private void CycleSolutionExplorerPosition()
+    {
+        // AvalonDock handles panel positioning - show message for now
+        AddToOutput("Solution Explorer positioning is handled by AvalonDock - drag and drop panels to reposition");
+    }
+
+    /// <summary>
+    /// Cycle Output Panel through different dock positions - AvalonDock handles this automatically
+    /// </summary>
+    private void CycleOutputPanelPosition()
+    {
+        // AvalonDock handles panel positioning - show message for now
+        AddToOutput("Output panel positioning is handled by AvalonDock - drag and drop panels to reposition");
+    }
+
+    /// <summary>
+    /// Move a panel to a specific dock position
+    /// </summary>
+    private void MovePanelToPosition(FrameworkElement panel, Dock newDock, string positionName)
+    {
+        // Remove panel from current position
+        var dockPanel = panel.Parent as DockPanel;
+        if (dockPanel != null)
+        {
+            dockPanel.Children.Remove(panel);
+            
+            // Set new dock position
+            DockPanel.SetDock(panel, newDock);
+            
+            // Update panel dimensions based on new position
+            if (newDock == Dock.Left || newDock == Dock.Right)
+            {
+                panel.Width = panel.Name == "SolutionExplorerPanel" ? 300 : 250;
+                panel.Height = double.NaN; // Auto height
+                panel.ClearValue(FrameworkElement.MaxHeightProperty);
+                panel.MinWidth = 150;
+                panel.MaxWidth = 600;
+            }
+            else if (newDock == Dock.Top || newDock == Dock.Bottom)
+            {
+                panel.Height = panel.Name == "OutputPanel" ? 200 : 150;
+                panel.Width = double.NaN; // Auto width
+                panel.ClearValue(FrameworkElement.MaxWidthProperty);
+                panel.MinHeight = 100;
+                panel.MaxHeight = 400;
+            }
+            
+            // Add panel back at the beginning (highest priority)
+            dockPanel.Children.Insert(0, panel);
+            
+            AddToOutput($"{panel.Name} moved to {positionName}");
+            StatusText.Text = $"Panel repositioned to {positionName}";
+            
+            // Force layout update
+            dockPanel.UpdateLayout();
+        }
+    }
+
+    // Context Menu Event Handlers - AvalonDock handles docking automatically
+    private void DockSolutionExplorerLeft_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockSolutionExplorerRight_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockSolutionExplorerTop_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockSolutionExplorerBottom_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+
+    // Context Menu Event Handlers for Output Panel
+    private void DockOutputLeft_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockOutputRight_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockOutputTop_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+    private void DockOutputBottom_Click(object sender, RoutedEventArgs e) => AddToOutput("AvalonDock handles panel positioning - drag and drop to reposition panels");
+
+    #endregion
 }

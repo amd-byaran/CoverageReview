@@ -20,17 +20,15 @@
     <NoWarn>$(NoWarn);MSB3277</NoWarn>
   </PropertyGroup>
 
-  <ItemGroup>
-    <!-- Copy hierarchy.txt to output directory -->
-    <None Include="hierarchy.txt">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
+
 
   <ItemGroup>
     <!-- Local NuGet packages -->
     <PackageReference Include="AMD.DatabaseReader" Version="1.0.1" />
-    <PackageReference Include="HvpHtmlParser" Version="1.1.2" />
+    <PackageReference Include="AvalonDock.Themes.VS2013" Version="2.0.0.5" />
+    <PackageReference Include="Extended.Wpf.Toolkit" Version="5.0.0" />
+    <PackageReference Include="HvpHtmlParser" Version="1.2.2" />
+    <PackageReference Include="JiraAPI" Version="1.0.2" />
     <!-- NuGet packages required by DatabaseReader -->
     <PackageReference Include="Npgsql" Version="8.0.3" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="8.0.0" />

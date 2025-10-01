@@ -403,6 +403,9 @@ public partial class ProjectWizard : Window
             // Regenerate project name with new report
             GenerateProjectName();
             
+            // Auto-generate Jira fields
+            AutoGenerateJiraFields();
+            
             LogToOutput($"=== END REPORT SELECTION DEBUG ===");
             UpdateUIState();
         }
@@ -488,6 +491,9 @@ public partial class ProjectWizard : Window
         
         // Regenerate project name with new coverage type
         GenerateProjectName();
+        
+        // Auto-generate Jira fields
+        AutoGenerateJiraFields();
         
         UpdateUIState();
         
@@ -1534,7 +1540,7 @@ public partial class ProjectWizard : Window
                 serverUrl = "https://logviewer-atl.amd.com";
                 LogToOutput($"Requesting HTTP authentication for: {serverUrl}");
                 
-                var (success, httpClient, rememberCredentials) = HttpAuthDialog.GetHttpAuthentication(
+                var (success, httpClient, rememberCredentials, username, password) = HttpAuthDialog.GetHttpAuthentication(
                     this, serverUrl);
                 
                 if (!success || httpClient == null)
@@ -1580,6 +1586,18 @@ public partial class ProjectWizard : Window
                 LogToOutput($"Set HvpTop: {_projectSettings.HvpTop}");
                 LogToOutput($"Set ProjectTestDef: {_projectSettings.ProjectTestDef}");
             }
+
+            // Set JiraProject and JiraServer from global settings
+            _projectSettings.JiraProject = AppSettings.GetJiraProject();
+            _projectSettings.JiraServer = AppSettings.GetJiraServer();
+            LogToOutput($"Set JiraProject: {_projectSettings.JiraProject}");
+            LogToOutput($"Set JiraServer: {_projectSettings.JiraServer}");
+            
+            // Auto-generate final Jira fields before saving
+            _projectSettings.GenerateJiraFields();
+            
+            LogToOutput($"Final JiraEpic: {_projectSettings.JiraEpic}");
+            LogToOutput($"Final JiraStory: {_projectSettings.JiraStory}");
 
             // Save project settings
             LogToOutput($"DEBUG: About to save project with ReportPath: {_projectSettings.ReportPath}");
@@ -1664,6 +1682,18 @@ public partial class ProjectWizard : Window
 
     private void LogToOutput(string message)
     {
-        // Debug logging disabled for clean console output
+        _mainWindow?.AddToOutput($"📋 ProjectWizard: {message}");
+    }
+
+    /// <summary>
+    /// Auto-generate Jira fields when selections change
+    /// </summary>
+    private void AutoGenerateJiraFields()
+    {
+        if (_projectSettings != null)
+        {
+            _projectSettings.GenerateJiraFields();
+            LogToOutput($"🎫 Auto-generated Jira fields - Epic: {_projectSettings.JiraEpic}, Story: {_projectSettings.JiraStory}");
+        }
     }
 }

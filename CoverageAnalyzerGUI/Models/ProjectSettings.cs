@@ -51,6 +51,18 @@ public class ProjectSettings
     [JsonProperty("reportNameWithoutVerifPlan")]
     public string ReportNameWithoutVerifPlan { get; set; } = string.Empty;
 
+    [JsonProperty("jiraEpic")]
+    public string JiraEpic { get; set; } = string.Empty;
+
+    [JsonProperty("jiraStory")]
+    public string JiraStory { get; set; } = string.Empty;
+
+    [JsonProperty("jiraServer")]
+    public string JiraServer { get; set; } = string.Empty;
+
+    [JsonProperty("jiraProject")]
+    public string JiraProject { get; set; } = string.Empty;
+
     /// <summary>
     /// Full local data path for internal use
     /// </summary>
@@ -92,6 +104,39 @@ public class ProjectSettings
     }
 
     /// <summary>
+    /// Generate Jira Epic and Story names based on project settings
+    /// </summary>
+    public void GenerateJiraFields()
+    {
+        // Generate JiraEpic: {release_name}_{coverage_type}
+        // Example: dcn6_0_func, dcn6_0_code
+        if (SelectedRelease != null && !string.IsNullOrEmpty(SelectedRelease.Name))
+        {
+            var releaseName = SelectedRelease.Name.ToLower().Replace(".", "_").Replace("-", "_");
+            var coverageTypeStr = CoverageType == CoverageType.Functional ? "func" : "code";
+            JiraEpic = $"{releaseName}_{coverageTypeStr}";
+        }
+        else
+        {
+            JiraEpic = string.Empty;
+        }
+
+        // Generate JiraStory: {release_name}_{report_name}
+        // Example: dcn6_0_dc_core_verif_plan, dcn6_0_gpu_shader_verif_plan
+        if (SelectedRelease != null && !string.IsNullOrEmpty(SelectedRelease.Name) && 
+            SelectedReport != null && !string.IsNullOrEmpty(SelectedReport.Name))
+        {
+            var releaseName = SelectedRelease.Name.ToLower().Replace(".", "_").Replace("-", "_");
+            var reportName = SelectedReport.Name.ToLower().Replace(".", "_").Replace("-", "_");
+            JiraStory = $"{releaseName}_{reportName}";
+        }
+        else
+        {
+            JiraStory = string.Empty;
+        }
+    }
+
+    /// <summary>
     /// Loads project settings from a JSON file
     /// </summary>
     public static ProjectSettings? Load(string projectFolderPath)
@@ -106,7 +151,10 @@ public class ProjectSettings
         try
         {
             var json = File.ReadAllText(settingsPath);
+            System.Diagnostics.Debug.WriteLine($"[ProjectSettings.Load] JSON content: {json}");
+            
             var settings = JsonConvert.DeserializeObject<ProjectSettings>(json);
+            System.Diagnostics.Debug.WriteLine($"[ProjectSettings.Load] Deserialized - JiraServer: '{settings?.JiraServer}', JiraProject: '{settings?.JiraProject}'");
             
             // Ensure the project folder path is updated in case the project was moved
             if (settings != null)

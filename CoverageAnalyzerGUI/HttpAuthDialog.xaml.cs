@@ -9,6 +9,8 @@ namespace CoverageAnalyzerGUI
     {
         public HttpClient? AuthenticatedHttpClient { get; private set; }
         public bool RememberCredentials { get; private set; }
+        public string Username { get; private set; } = string.Empty;
+        public string Password { get; private set; } = string.Empty;
 
         public HttpAuthDialog(string serverUrl, string? defaultUsername = null)
         {
@@ -51,7 +53,9 @@ namespace CoverageAnalyzerGUI
 
                 AuthenticatedHttpClient = httpClient;
                 RememberCredentials = RememberCheckBox.IsChecked == true;
-                
+                Username = username;
+                Password = password;
+
                 DialogResult = true;
                 Close();
             }
@@ -82,8 +86,8 @@ namespace CoverageAnalyzerGUI
         /// <param name="parent">Parent window</param>
         /// <param name="serverUrl">Server URL for display</param>
         /// <param name="defaultUsername">Default username to pre-fill</param>
-        /// <returns>Tuple of (success, httpClient, rememberCredentials)</returns>
-        public static (bool success, HttpClient? httpClient, bool rememberCredentials) GetHttpAuthentication(
+        /// <returns>Tuple of (success, httpClient, rememberCredentials, username, password)</returns>
+        public static (bool success, HttpClient? httpClient, bool rememberCredentials, string username, string password) GetHttpAuthentication(
             Window parent, string serverUrl, string? defaultUsername = null)
         {
             var dialog = new HttpAuthDialog(serverUrl, defaultUsername);
@@ -93,13 +97,13 @@ namespace CoverageAnalyzerGUI
             
             if (result == true)
             {
-                return (true, dialog.AuthenticatedHttpClient, dialog.RememberCredentials);
+                return (true, dialog.AuthenticatedHttpClient, dialog.RememberCredentials, dialog.Username, dialog.Password);
             }
             else
             {
                 // Clean up if dialog was cancelled
                 dialog.AuthenticatedHttpClient?.Dispose();
-                return (false, null, false);
+                return (false, null, false, string.Empty, string.Empty);
             }
         }
 

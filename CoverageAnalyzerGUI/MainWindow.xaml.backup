@@ -1,0 +1,667 @@
+﻿<Window x:Class="CoverageAnalyzerGUI.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:CoverageAnalyzerGUI"
+        xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        xmlns:avalonDock="http://schemas.xceed.com/wpf/xaml/avalondock"
+        xmlns:avalondockthemes="clr-namespace:AvalonDock.Themes;assembly=AvalonDock.Themes.VS2013"
+        mc:Ignorable="d"
+        Title="Coverage Analyzer - Visual Studio Style (.NET Assembly Integration)" Height="900" Width="1400">
+    
+    <Window.Resources>
+        <!-- Light Theme Resources (Default) -->
+        <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#FFFFFF"/>
+        <SolidColorBrush x:Key="ControlBackgroundBrush" Color="#F0F0F0"/>
+        <SolidColorBrush x:Key="MenuBackgroundBrush" Color="#F6F6F6"/>
+        <SolidColorBrush x:Key="TextForegroundBrush" Color="#000000"/>
+        <SolidColorBrush x:Key="BorderBrush" Color="#E5E5E5"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#007ACC"/>
+    </Window.Resources>
+    
+    <!-- Main Layout Container with AvalonDock -->
+    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/> <!-- Menu and Toolbar -->
+            <RowDefinition Height="*"/>    <!-- AvalonDock Area -->
+            <RowDefinition Height="Auto"/> <!-- Status Bar -->
+        </Grid.RowDefinitions>
+        
+        <!-- Top Area: Menu and Toolbar -->
+        <StackPanel Grid.Row="0">
+
+            <!-- Menu Bar -->
+            <Menu Background="{DynamicResource MenuBackgroundBrush}" 
+                  BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" 
+                  Foreground="{DynamicResource TextForegroundBrush}">
+                <MenuItem Header="_File">
+                    <MenuItem Header="_New Project..." Click="NewProject_Click"/>
+                    <MenuItem Header="_Open Project..." Click="OpenProject_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_Load Coverage Data" Click="LoadCoverageData_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_Save" Click="Save_Click"/>
+                    <MenuItem Header="Save _All" Click="SaveAll_Click"/>
+                    <Separator/>
+                    <MenuItem Header="E_xit" Click="Exit_Click"/>
+                </MenuItem>
+                <MenuItem Header="_Edit">
+                    <MenuItem Header="_Undo" Click="Undo_Click"/>
+                    <MenuItem Header="_Redo" Click="Redo_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Cu_t" Click="Cut_Click"/>
+                    <MenuItem Header="_Copy" Click="Copy_Click"/>
+                    <MenuItem Header="_Paste" Click="Paste_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Multi-_Selection">
+                        <MenuItem Header="_Clear All Selections" Click="ClearAllSelections_Click"/>
+                        <MenuItem Header="Select _All" Click="SelectAll_Click"/>
+                        <MenuItem Header="Export _Selected Nodes" Click="ExportSelectedNodes_Click"/>
+                    </MenuItem>
+                </MenuItem>
+                <MenuItem Header="_View">
+                    <MenuItem Header="_Solution Explorer" Click="ToggleSolutionExplorer_Click"/>
+                    <MenuItem Header="_Output" Click="ToggleOutput_Click"/>
+                    <MenuItem Header="_Error List" Click="ToggleErrorList_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_Theme">
+                        <MenuItem Header="_Light Theme" Click="SetLightTheme_Click"/>
+                        <MenuItem Header="_Dark Theme" Click="SetDarkTheme_Click"/>
+                    </MenuItem>
+                </MenuItem>
+                <MenuItem Header="_Tools">
+                    <MenuItem Header="_Coverage Analysis" Click="RunCoverageAnalysis_Click"/>
+                    <MenuItem Header="_Reload Project" Click="TestHvpTreeView_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_HTTP Authentication..." Click="HttpAuthentication_Click"/>
+                    <Separator/>
+                    <MenuItem Header="Create _Jira" Click="CreateJira_Click"/>
+                    <MenuItem Header="Add to _Waiver" Click="AddToWaiver_Click"/>
+                    <Separator/>
+                    <MenuItem Header="_Options..." Click="Options_Click"/>
+                </MenuItem>
+                <MenuItem Header="_Help">
+                    <MenuItem Header="_About" Click="About_Click"/>
+                </MenuItem>
+            </Menu>
+
+            <!-- Toolbar -->
+            <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                <ToolBarTray Background="{DynamicResource ControlBackgroundBrush}">
+                    <ToolBar Background="{DynamicResource ControlBackgroundBrush}" 
+                             Foreground="{DynamicResource TextForegroundBrush}">
+                        <Button Click="NewProject_Click" ToolTip="New Project" 
+                                Content="📄" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                        <Button Click="OpenProject_Click" ToolTip="Open Project" 
+                                Content="📁" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                        <Button Click="Save_Click" ToolTip="Save" 
+                                Content="💾" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                        <Separator/>
+                        <Button Click="RunCoverageAnalysis_Click" ToolTip="Run Coverage Analysis" 
+                                Content="▶️" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                        <Separator/>
+                        <Button Click="CreateJira_Click" ToolTip="Create Jira" 
+                                Content="🎫" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                        <Button Click="AddToWaiver_Click" ToolTip="Add to Waiver" 
+                                Content="📋" Padding="6,4" FontSize="14" Width="32" Height="28"/>
+                    </ToolBar>
+                </ToolBarTray>
+            </Border>
+        </StackPanel>
+
+        <!-- Output Window - Resizable Panel at Bottom -->
+        <Grid DockPanel.Dock="Bottom" Name="OutputPanel" Height="200" MinHeight="100">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            
+            <!-- Resizer for Output Panel -->
+            <GridSplitter Grid.Row="0" Height="4" HorizontalAlignment="Stretch" 
+                          Background="{DynamicResource BorderBrush}" 
+                          ResizeDirection="Rows" ResizeBehavior="PreviousAndNext"/>
+            
+            <!-- Output Panel Content -->
+            <Border Grid.Row="1" Background="{DynamicResource ControlBackgroundBrush}" 
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Output Panel Header -->
+                    <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                            MouseLeftButtonDown="OutputHeader_MouseLeftButtonDown">
+                        <Border.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Dock to Bottom" Click="DockOutputBottom_Click"/>
+                                <MenuItem Header="Dock to Top" Click="DockOutputTop_Click"/>
+                                <MenuItem Header="Dock to Left" Click="DockOutputLeft_Click"/>
+                                <MenuItem Header="Dock to Right" Click="DockOutputRight_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Hide Panel" Click="HideOutputPanel_Click"/>
+                            </ContextMenu>
+                        </Border.ContextMenu>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Output (Double-click or Right-click to move)" 
+                                       FontWeight="Bold" FontSize="11" 
+                                       Foreground="{DynamicResource TextForegroundBrush}" 
+                                       VerticalAlignment="Center" Margin="8,4"/>
+                            <Button Grid.Column="1" Content="✕" Width="20" Height="20" 
+                                    Margin="4" Background="Transparent" BorderThickness="0"
+                                    Click="HideOutputPanel_Click" 
+                                    ToolTip="Hide Output Panel"/>
+                        </Grid>
+                    </Border>
+                    
+                    <!-- Output Content -->
+                    <ScrollViewer Grid.Row="1" Name="OutputScrollViewer" 
+                                  VerticalScrollBarVisibility="Auto" 
+                                  HorizontalScrollBarVisibility="Auto" 
+                                  Background="{DynamicResource WindowBackgroundBrush}">
+                        <TextBox Name="OutputTextBox" 
+                                 Text="Output will appear here..." 
+                                 Padding="10" FontFamily="Consolas" FontSize="12"
+                                 TextWrapping="Wrap" IsReadOnly="True"
+                                 Background="Transparent" BorderThickness="0"
+                                 Foreground="{DynamicResource TextForegroundBrush}"/>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Solution Explorer - Resizable Panel at Left -->
+        <Grid DockPanel.Dock="Left" Name="SolutionExplorerPanel" Width="300" MinWidth="200">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            
+            <!-- Solution Explorer Content -->
+            <Border Grid.Column="0" Background="{DynamicResource ControlBackgroundBrush}" 
+                    BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,1,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    
+                    <!-- Solution Explorer Header -->
+                    <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+                            MouseLeftButtonDown="SolutionExplorerHeader_MouseLeftButtonDown">
+                        <Border.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Dock to Left" Click="DockSolutionExplorerLeft_Click"/>
+                                <MenuItem Header="Dock to Right" Click="DockSolutionExplorerRight_Click"/>
+                                <MenuItem Header="Dock to Top" Click="DockSolutionExplorerTop_Click"/>
+                                <MenuItem Header="Dock to Bottom" Click="DockSolutionExplorerBottom_Click"/>
+                                <Separator/>
+                                <MenuItem Header="Hide Panel" Click="HideSolutionExplorerPanel_Click"/>
+                            </ContextMenu>
+                        </Border.ContextMenu>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Solution Explorer (Double-click or Right-click to move)" 
+                                       FontWeight="Bold" FontSize="11" 
+                                       Foreground="{DynamicResource TextForegroundBrush}" 
+                                       VerticalAlignment="Center" Margin="8,4"/>
+                            <Button Grid.Column="1" Content="✕" Width="20" Height="20" 
+                                    Margin="4" Background="Transparent" BorderThickness="0"
+                                    Click="HideSolutionExplorerPanel_Click" 
+                                    ToolTip="Hide Solution Explorer"/>
+                        </Grid>
+                    </Border>
+                
+                <!-- Explorer Tabs -->
+                <TabControl Grid.Row="1" Name="ExplorerTabControl" TabStripPlacement="Top" 
+                           Background="{DynamicResource ControlBackgroundBrush}"
+                           Foreground="{DynamicResource TextForegroundBrush}"
+                               BorderThickness="0" SelectionChanged="ExplorerTabControl_SelectionChanged">
+                        
+                        <!-- HVP Tab -->
+                        <TabItem Header="Hvp" IsSelected="True">
+                            <!-- HVP Content with Horizontal Scrolling -->
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                        
+                        <!-- Fixed Column Headers -->
+                        <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1">
+                            <ScrollViewer x:Name="HeaderScrollViewer" 
+                                          HorizontalScrollBarVisibility="Hidden" 
+                                          VerticalScrollBarVisibility="Disabled"
+                                          CanContentScroll="True"
+                                          PanningMode="Both"
+                                          Focusable="True">
+                                <Grid MinWidth="500" Margin="38,0,0,0"> <!-- 20px checkbox + 16px expander + 2px padding offset -->
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="200"/>  <!-- Name - reduced from 234 -->
+                                        <ColumnDefinition Width="1"/>    <!-- Separator -->
+                                        <ColumnDefinition Width="65"/>   <!-- Score - reduced from 80 -->
+                                        <ColumnDefinition Width="65"/>   <!-- Group - reduced from 100 -->
+                                        <ColumnDefinition Width="65"/>   <!-- Assert - reduced from 80 -->
+                                        <ColumnDefinition Width="65"/>   <!-- Test - reduced from 90 -->
+                                    </Grid.ColumnDefinitions>
+                                    
+                                    <TextBlock Grid.Column="0" Text="Name" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Padding="1,1,1,1"
+                                               FontFamily="Consolas"/>
+                                    <!-- Separator column (Grid.Column="1") - empty -->
+                                    <Border Grid.Column="1" Background="{DynamicResource BorderBrush}" Width="1" VerticalAlignment="Stretch" Margin="0,2,0,2"/>
+                                    <TextBlock Grid.Column="2" Text="Score" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Padding="1,1,1,1"
+                                               FontFamily="Consolas"/>
+                                    <TextBlock Grid.Column="3" Text="Group" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Padding="1,1,1,1"
+                                               FontFamily="Consolas"/>
+                                    <TextBlock Grid.Column="4" Text="Assert" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Padding="1,1,1,1"
+                                               FontFamily="Consolas"/>
+                                    <TextBlock Grid.Column="5" Text="Test" FontWeight="Bold" FontSize="11"
+                                               Foreground="{DynamicResource TextForegroundBrush}" 
+                                               VerticalAlignment="Center" HorizontalAlignment="Left" Padding="1,1,1,1"
+                                               FontFamily="Consolas"/>
+                                </Grid>
+                            </ScrollViewer>
+                        </Border>
+                        
+                        <!-- Scrollable TreeView -->
+                        <ScrollViewer x:Name="TreeScrollViewer" Grid.Row="1" 
+                                      HorizontalScrollBarVisibility="Auto" 
+                                      VerticalScrollBarVisibility="Auto"
+                                      CanContentScroll="False"
+                                      PanningMode="Both"
+                                      Focusable="True"
+                                      ScrollChanged="TreeScrollViewer_ScrollChanged">
+                            <TreeView Name="SolutionExplorer" 
+                                      Background="{DynamicResource WindowBackgroundBrush}" 
+                                      BorderThickness="0" Margin="4,0,4,4"
+                                      Foreground="{DynamicResource TextForegroundBrush}"
+                                      MinWidth="500"
+                                      VirtualizingPanel.IsVirtualizing="False"
+                                      SelectedItemChanged="SolutionExplorer_SelectedItemChanged">
+                                <TreeView.ContextMenu>
+                                    <ContextMenu>
+                                        <MenuItem Header="Create _Jira" Click="ContextMenu_CreateJira_Click"/>
+                                        <MenuItem Header="Show _Jira" Click="ContextMenu_ShowJira_Click"/>
+                                        <Separator/>
+                                        <MenuItem Header="Add to _Waiver" Click="ContextMenu_AddToWaiver_Click"/>
+                                        <Separator/>
+                                        <MenuItem Header="Clear _Selection" Click="ContextMenu_ClearSelection_Click"/>
+                                    </ContextMenu>
+                                </TreeView.ContextMenu>
+                                <TreeView.Resources>
+                                    <!-- Custom TreeViewItem Template with Tooltip -->
+                                    <Style TargetType="TreeViewItem">
+                                        <Setter Property="ToolTip">
+                                            <Setter.Value>
+                                                <ToolTip>
+                                                    <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="12"/>
+                                                </ToolTip>
+                                            </Setter.Value>
+                                        </Setter>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="TreeViewItem">
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="*"/>
+                                                        </Grid.RowDefinitions>
+                                                        
+                                                        <!-- TreeViewItem Content as Table Row -->
+                                                        <Border Grid.Row="0" x:Name="ItemBorder" 
+                                                                Background="{TemplateBinding Background}"
+                                                                BorderBrush="{DynamicResource BorderBrush}" 
+                                                                BorderThickness="0,0,0,1" 
+                                                                Padding="2">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="20"/>  <!-- Checkbox for multi-selection -->
+                                                                    <ColumnDefinition Width="16"/>  <!-- Expander -->
+                                                                    <ColumnDefinition Width="*"/>   <!-- Content from Header (full Grid) -->
+                                                                </Grid.ColumnDefinitions>
+                                                                
+                                                                <!-- Multi-Selection Checkbox -->
+                                                                <CheckBox Grid.Column="0" x:Name="SelectionCheckBox" 
+                                                                          VerticalAlignment="Center" 
+                                                                          HorizontalAlignment="Center"
+                                                                          Margin="2,0,2,0"
+                                                                          Checked="TreeViewItem_Checked"
+                                                                          Unchecked="TreeViewItem_Unchecked"
+                                                                          Visibility="Visible"/>
+                                                                
+                                                                <!-- Expander Button -->
+                                                                <ToggleButton Grid.Column="1" x:Name="Expander" 
+                                                                              ClickMode="Press" 
+                                                                              IsChecked="{Binding Path=IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                                                                    <ToggleButton.Style>
+                                                                        <Style TargetType="ToggleButton">
+                                                                            <Setter Property="Focusable" Value="False"/>
+                                                                            <Setter Property="Width" Value="16"/>
+                                                                            <Setter Property="Height" Value="16"/>
+                                                                            <Setter Property="Template">
+                                                                                <Setter.Value>
+                                                                                    <ControlTemplate TargetType="ToggleButton">
+                                                                                        <Border Background="Transparent" Height="16" Padding="5,5,5,5" Width="16">
+                                                                                            <Path x:Name="ExpandPath" Data="M0,0 L0,6 L6,0 z" Fill="{DynamicResource TextForegroundBrush}" Stroke="{DynamicResource TextForegroundBrush}">
+                                                                                                <Path.RenderTransform>
+                                                                                                    <RotateTransform Angle="135" CenterX="3" CenterY="3"/>
+                                                                                                </Path.RenderTransform>
+                                                                                            </Path>
+                                                                                        </Border>
+                                                                                        <ControlTemplate.Triggers>
+                                                                                            <Trigger Property="IsChecked" Value="True">
+                                                                                                <Setter Property="RenderTransform" TargetName="ExpandPath">
+                                                                                                    <Setter.Value>
+                                                                                                        <RotateTransform Angle="180" CenterX="3" CenterY="3"/>
+                                                                                                    </Setter.Value>
+                                                                                                </Setter>
+                                                                                            </Trigger>
+                                                                                        </ControlTemplate.Triggers>
+                                                                                    </ControlTemplate>
+                                                                                </Setter.Value>
+                                                                            </Setter>
+                                                                        </Style>
+                                                                    </ToggleButton.Style>
+                                                                </ToggleButton>
+                                                                
+                                                                <!-- Content from Header (the Grid created by code-behind) -->
+                                                                <ContentPresenter Grid.Column="2" 
+                                                                                  x:Name="PART_Header" 
+                                                                                  ContentSource="Header"
+                                                                                  HorizontalAlignment="Stretch"/>
+                                                            </Grid>
+                                                        </Border>
+                                                        
+                                                        <!-- Child Items with NO indentation to prevent separator shift -->
+                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"/>
+                                                    </Grid>
+                                                    
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsExpanded" Value="false">
+                                                            <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                        <Trigger Property="HasItems" Value="false">
+                                                            <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="true">
+                                                            <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                                        </Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </TreeView.Resources>
+                                
+                                <TreeViewItem Header="Coverage Data" IsExpanded="True">
+                                    <TreeViewItem Header="No data loaded - use File → Load Coverage Data" />
+                                </TreeViewItem>
+                                </TreeView>
+                            </ScrollViewer>
+                        </Grid>
+                        </TabItem>
+                        
+                        <!-- Stat Tab -->
+                        <TabItem Header="Stat">
+                            <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                
+                                <!-- Statistics Header -->
+                                <Border Grid.Row="0" Background="{DynamicResource MenuBackgroundBrush}" 
+                                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" 
+                                        Padding="8,4">
+                                    <StackPanel>
+                                        <TextBlock Text="Coverage Statistics" FontWeight="Bold" FontSize="11"
+                                                   Foreground="{DynamicResource TextForegroundBrush}" 
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Name="ProjectInfoText" Text="" FontSize="10"
+                                                   Foreground="{DynamicResource TextForegroundBrush}" 
+                                                   Margin="0,2,0,0"/>
+                                    </StackPanel>
+                                </Border>
+                                
+                                <!-- Statistics TreeView Content -->
+                                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" 
+                                              HorizontalScrollBarVisibility="Auto"
+                                              Background="{DynamicResource WindowBackgroundBrush}"
+                                              PanningMode="Both"
+                                              Focusable="True">
+                                    <TreeView Name="StatsTreeView" 
+                                              Background="{DynamicResource WindowBackgroundBrush}" 
+                                              BorderThickness="0" Margin="4,4,4,4"
+                                              Foreground="{DynamicResource TextForegroundBrush}"
+                                              VirtualizingPanel.IsVirtualizing="False"
+                                              SelectedItemChanged="StatsTreeView_SelectedItemChanged">
+                                        <TreeView.Resources>
+                                            <!-- Custom TreeViewItem Template with Tooltip and Checkbox for Stats -->
+                                            <Style TargetType="TreeViewItem">
+                                                <Setter Property="ToolTip">
+                                                    <Setter.Value>
+                                                        <ToolTip>
+                                                            <TextBlock Text="{Binding}" FontWeight="Bold" FontSize="12"/>
+                                                        </ToolTip>
+                                                    </Setter.Value>
+                                                </Setter>
+                                                <Setter Property="Template">
+                                                    <Setter.Value>
+                                                        <ControlTemplate TargetType="TreeViewItem">
+                                                            <Grid>
+                                                                <Grid.RowDefinitions>
+                                                                    <RowDefinition Height="Auto"/>
+                                                                    <RowDefinition Height="*"/>
+                                                                </Grid.RowDefinitions>
+                                                                
+                                                                <!-- TreeViewItem Content with Checkbox -->
+                                                                <Border Grid.Row="0" x:Name="ItemBorder" 
+                                                                        Background="{TemplateBinding Background}"
+                                                                        BorderBrush="{DynamicResource BorderBrush}" 
+                                                                        BorderThickness="0,0,0,1" 
+                                                                        Padding="2">
+                                                                    <Grid>
+                                                                        <Grid.ColumnDefinitions>
+                                                                            <ColumnDefinition Width="20"/>  <!-- Checkbox -->
+                                                                            <ColumnDefinition Width="16"/>  <!-- Expander -->
+                                                                            <ColumnDefinition Width="*"/>   <!-- Content -->
+                                                                        </Grid.ColumnDefinitions>
+                                                                        
+                                                                        <!-- Multi-Selection Checkbox -->
+                                                                        <CheckBox Grid.Column="0" x:Name="StatsSelectionCheckBox" 
+                                                                                  VerticalAlignment="Center" 
+                                                                                  HorizontalAlignment="Center"
+                                                                                  Margin="2,0,2,0"
+                                                                                  Checked="StatsTreeViewItem_Checked"
+                                                                                  Unchecked="StatsTreeViewItem_Unchecked"/>
+                                                                        
+                                                                        <!-- Expander Button -->
+                                                                        <ToggleButton Grid.Column="1" x:Name="Expander" 
+                                                                                      ClickMode="Press" 
+                                                                                      IsChecked="{Binding Path=IsExpanded, RelativeSource={RelativeSource TemplatedParent}}">
+                                                                            <ToggleButton.Style>
+                                                                                <Style TargetType="ToggleButton">
+                                                                                    <Setter Property="Focusable" Value="False"/>
+                                                                                    <Setter Property="Width" Value="16"/>
+                                                                                    <Setter Property="Height" Value="16"/>
+                                                                                    <Setter Property="Template">
+                                                                                        <Setter.Value>
+                                                                                            <ControlTemplate TargetType="ToggleButton">
+                                                                                                <Border Background="Transparent" Height="16" Padding="5,5,5,5" Width="16">
+                                                                                                    <Path x:Name="ExpandPath" Data="M0,0 L0,6 L6,0 z" Fill="{DynamicResource TextForegroundBrush}" Stroke="{DynamicResource TextForegroundBrush}">
+                                                                                                        <Path.RenderTransform>
+                                                                                                            <RotateTransform Angle="135" CenterX="3" CenterY="3"/>
+                                                                                                        </Path.RenderTransform>
+                                                                                                    </Path>
+                                                                                                </Border>
+                                                                                                <ControlTemplate.Triggers>
+                                                                                                    <Trigger Property="IsChecked" Value="True">
+                                                                                                        <Setter Property="RenderTransform" TargetName="ExpandPath">
+                                                                                                            <Setter.Value>
+                                                                                                                <RotateTransform Angle="180" CenterX="3" CenterY="3"/>
+                                                                                                            </Setter.Value>
+                                                                                                        </Setter>
+                                                                                                    </Trigger>
+                                                                                                </ControlTemplate.Triggers>
+                                                                                            </ControlTemplate>
+                                                                                        </Setter.Value>
+                                                                                    </Setter>
+                                                                                </Style>
+                                                                            </ToggleButton.Style>
+                                                                        </ToggleButton>
+                                                                        
+                                                                        <!-- Content -->
+                                                                        <ContentPresenter Grid.Column="2" 
+                                                                                          x:Name="PART_Header" 
+                                                                                          ContentSource="Header"
+                                                                                          HorizontalAlignment="Stretch"/>
+                                                                    </Grid>
+                                                                </Border>
+                                                                
+                                                                <!-- Child Items -->
+                                                                <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"/>
+                                                            </Grid>
+                                                            
+                                                            <ControlTemplate.Triggers>
+                                                                <Trigger Property="IsExpanded" Value="false">
+                                                                    <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed"/>
+                                                                </Trigger>
+                                                                <Trigger Property="HasItems" Value="false">
+                                                                    <Setter TargetName="Expander" Property="Visibility" Value="Hidden"/>
+                                                                </Trigger>
+                                                                <Trigger Property="IsSelected" Value="true">
+                                                                    <Setter TargetName="ItemBorder" Property="Background" Value="{DynamicResource AccentBrush}"/>
+                                                                </Trigger>
+                                                            </ControlTemplate.Triggers>
+                                                        </ControlTemplate>
+                                                    </Setter.Value>
+                                                </Setter>
+                                            </Style>
+                                        </TreeView.Resources>
+                                        <TreeViewItem Header="Load coverage data to view statistics" />
+                                    </TreeView>
+                                </ScrollViewer>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Grid>
+            </Border>
+            
+            <!-- Resizer for Solution Explorer -->
+            <GridSplitter Grid.Column="1" Width="4" HorizontalAlignment="Center" 
+                          Background="{DynamicResource BorderBrush}" 
+                          ResizeDirection="Columns" ResizeBehavior="PreviousAndNext"/>
+        </Grid>
+
+        <!-- Main Working Area - Fills remaining space -->
+        <Grid Name="MainWorkspace" Background="{DynamicResource WindowBackgroundBrush}">
+            <!-- Main Tab Control for center area -->
+            <TabControl Name="MainTabControl" TabStripPlacement="Top" BorderThickness="0"
+                       Background="{DynamicResource ControlBackgroundBrush}"
+                       Foreground="{DynamicResource TextForegroundBrush}"
+                       SelectedIndex="0">
+                <TabItem Header="🌐 HVP Browser" IsSelected="True">
+                    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        
+                        <!-- Browser toolbar -->
+                        <Border Grid.Row="0" Background="{DynamicResource ControlBackgroundBrush}" 
+                                BorderBrush="{DynamicResource BorderBrush}" 
+                                BorderThickness="0,0,0,1" Padding="10,5">
+                            <StackPanel Orientation="Horizontal">
+                                <Button Name="BackButton" 
+                                      Content="◀️" 
+                                      Click="BackButton_Click"
+                                      ToolTip="Back"
+                                      FontSize="14"
+                                      Padding="6,4"
+                                      Width="32" Height="28"
+                                      Margin="0,0,3,0"
+                                      Background="{DynamicResource ControlBackgroundBrush}"
+                                      Foreground="{DynamicResource TextForegroundBrush}"
+                                      BorderBrush="{DynamicResource BorderBrush}"
+                                      IsEnabled="False"/>
+                                <Button Name="ForwardButton" 
+                                      Content="▶️" 
+                                      Click="ForwardButton_Click"
+                                      ToolTip="Forward"
+                                      FontSize="14"
+                                      Padding="6,4"
+                                      Width="32" Height="28"
+                                      Margin="0,0,3,0"
+                                      Background="{DynamicResource ControlBackgroundBrush}"
+                                      Foreground="{DynamicResource TextForegroundBrush}"
+                                      BorderBrush="{DynamicResource BorderBrush}"
+                                      IsEnabled="False"/>
+                                <Button Name="RefreshButton" 
+                                      Content="🔄" 
+                                      Click="RefreshButton_Click"
+                                      ToolTip="Refresh"
+                                      FontSize="14"
+                                      Padding="6,4"
+                                      Width="32" Height="28"
+                                      Margin="0,0,10,0"
+                                      Background="{DynamicResource ControlBackgroundBrush}"
+                                      Foreground="{DynamicResource TextForegroundBrush}"
+                                      BorderBrush="{DynamicResource BorderBrush}"/>
+                                <Separator Margin="0,0,10,0"/>
+                                <TextBlock Text="🌐 HVP Report Browser" 
+                                         VerticalAlignment="Center" 
+                                         FontWeight="Bold"
+                                         Foreground="{DynamicResource TextForegroundBrush}" 
+                                         Margin="0,0,10,0"/>
+                            </StackPanel>
+                        </Border>
+                        
+                        <!-- WebView2 Browser -->
+                        <wv2:WebView2 Grid.Row="1" Name="HvpBrowser" 
+                                      Source="about:blank"
+                                      Margin="2"/>
+                    </Grid>
+                </TabItem>
+                <TabItem Header="Module Analysis">
+                    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                        <TextBlock Text="Module analysis view will be implemented here" 
+                                  HorizontalAlignment="Center" 
+                                  VerticalAlignment="Center"
+                                  FontSize="16" 
+                                  Foreground="{DynamicResource TextForegroundBrush}"/>
+                    </Grid>
+                </TabItem>
+                <TabItem Header="Test Results">
+                    <Grid Background="{DynamicResource WindowBackgroundBrush}">
+                        <TextBlock Text="Test results view will be implemented here" 
+                                  HorizontalAlignment="Center" 
+                                  VerticalAlignment="Center"
+                                  FontSize="16" 
+                                  Foreground="{DynamicResource TextForegroundBrush}"/>
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Grid>
+        
+    </DockPanel>
+</Window>
