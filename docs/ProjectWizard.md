@@ -52,7 +52,6 @@ The project wizard guides users through a 7-step process:
   ProjectFolder/
   ├── project.json         # Project settings
   └── data/               # Coverage data files
-      ├── hierarchy.txt
       ├── coverage.txt
       └── *.txt files
   ```

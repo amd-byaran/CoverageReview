@@ -37,6 +37,10 @@ namespace CoverageAnalyzerGUI
             // Initialize WebView2
             InitializeWebView();
             
+            // Enable mouse wheel scrolling for TreeViews
+            HvpTreeView.PreviewMouseWheel += TreeView_PreviewMouseWheel;
+            StatsTreeView.PreviewMouseWheel += TreeView_PreviewMouseWheel;
+            
             // Set initial status
             StatusText.Text = "Ready - Visual Studio Professional Style Interface";
             
@@ -325,6 +329,76 @@ namespace CoverageAnalyzerGUI
             }
         }
 
+        #endregion
+        
+        #region Mouse Wheel Handling
+        
+        /// <summary>
+        /// Handle mouse wheel events for TreeViews to enable smooth scrolling
+        /// </summary>
+        private void TreeView_PreviewMouseWheel(object sender, System.Windows.Input.MouseWheelEventArgs e)
+        {
+            try
+            {
+                // Find the ScrollViewer that wraps the TreeView
+                ScrollViewer? scrollViewer = null;
+                
+                // First try to find the ScrollViewer parent of the TreeView
+                if (sender is TreeView treeView)
+                {
+                    scrollViewer = FindScrollViewerParent(treeView);
+                }
+                
+                // If we found the ScrollViewer, handle the scrolling
+                if (scrollViewer != null)
+                {
+                    // Calculate scroll amount (3 lines per wheel notch for smooth scrolling)
+                    double scrollAmount = -e.Delta / 120.0 * 48.0; // 48 pixels per wheel notch (about 3 lines)
+                    
+                    // Apply the scroll offset
+                    double newOffset = scrollViewer.VerticalOffset + scrollAmount;
+                    
+                    // Clamp to valid range
+                    newOffset = Math.Max(0, Math.Min(newOffset, scrollViewer.ScrollableHeight));
+                    
+                    // Scroll vertically
+                    scrollViewer.ScrollToVerticalOffset(newOffset);
+                    
+                    // Mark event as handled so it doesn't bubble up
+                    e.Handled = true;
+                }
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"Error handling mouse wheel: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Find the ScrollViewer parent of a given element
+        /// </summary>
+        private ScrollViewer? FindScrollViewerParent(DependencyObject element)
+        {
+            try
+            {
+                DependencyObject? parent = VisualTreeHelper.GetParent(element);
+                while (parent != null)
+                {
+                    if (parent is ScrollViewer scrollViewer)
+                    {
+                        return scrollViewer;
+                    }
+                    parent = VisualTreeHelper.GetParent(parent);
+                }
+                return null;
+            }
+            catch (Exception ex)
+            {
+                AddToOutput($"Error finding ScrollViewer parent: {ex.Message}");
+                return null;
+            }
+        }
+        
         #endregion
     }
 }

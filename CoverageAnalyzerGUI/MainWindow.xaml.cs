@@ -74,6 +74,7 @@ public class HierarchyNode : INotifyPropertyChanged
     public int TotalLines { get; set; }
     public List<HierarchyNode> Children { get; set; } = new List<HierarchyNode>();
     public bool IsExpanded { get; set; } = false;
+    public object? HvpNodeData { get; set; } // Reference to original HvpNode data
     
     public bool IsSelected 
     { 
@@ -255,6 +256,7 @@ public partial class MainWindow : Window
     // Multi-selection support for HVP tree
     private HashSet<TreeViewItem> _selectedTreeViewItems = new HashSet<TreeViewItem>();
     private HashSet<HierarchyNode> _selectedNodes = new HashSet<HierarchyNode>();
+    private HashSet<object> _selectedHvpNodes = new HashSet<object>(); // Track selection by HvpNode data
     
     // Multi-selection support for Stats tree
     private HashSet<TreeViewItem> _selectedStatsTreeViewItems = new HashSet<TreeViewItem>();
@@ -269,6 +271,7 @@ public partial class MainWindow : Window
     
     // Commands for keyboard shortcuts
     public ICommand ToggleOutputCommand { get; private set; }
+    public ICommand RefreshWebViewSizingCommand { get; private set; }
 
     public MainWindow()
     {
@@ -283,8 +286,15 @@ public partial class MainWindow : Window
             ToggleOutput_Click(this, new RoutedEventArgs());
         });
         
-        // Enable mouse wheel scrolling for TreeView and ScrollViewers
+        RefreshWebViewSizingCommand = new RelayCommand(_ => {
+            AddToOutput("🔄 Manually refreshing WebView2 content...");
+            // Just reinitialize content
+            ReinitializeWebViewContent();
+        });
+        
+        // Enable mouse wheel scrolling for TreeViews and ScrollViewers
         HvpTreeView.PreviewMouseWheel += SolutionExplorer_PreviewMouseWheel;
+        StatsTreeView.PreviewMouseWheel += SolutionExplorer_PreviewMouseWheel;
         
         try
         {
@@ -299,6 +309,9 @@ public partial class MainWindow : Window
             // Initialize WebView2
             InitializeWebView();
             
+            // Set up WebView2 loaded events for additional sizing control (disabled to avoid content loading issues)
+            // SetupWebViewLoadedEvents();
+            
             // Ensure window is visible and activated
             this.Show();
             this.Activate();
@@ -310,6 +323,12 @@ public partial class MainWindow : Window
             this.Loaded += async (s, e) => {
                 EnsureOutputPanelVisible();
                 AddToOutput("✓ Application ready - Output panel should be visible");
+                
+                // Set up WebView2 dynamic sizing after layout is loaded
+                SetupWebView2DynamicSizing();
+                
+                // Monitor DockingManager layout changes to force WebView2 updates
+                SetupDockingManagerLayoutMonitoring();
                 
                 // Initialize Jira browser after UI is fully loaded (on UI thread)
                 try 
@@ -424,6 +443,207 @@ public partial class MainWindow : Window
         {
             LogToFile($"WebView2 initialization error: {ex.Message}");
             AddToOutput($"HTML browser initialization error: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+
+
+
+
+
+
+
+
+
+
+    /// <summary>
+    /// Monitors DockingManager layout changes to force WebView2 updates when Output panel toggles
+    /// </summary>
+    private void SetupDockingManagerLayoutMonitoring()
+    {
+        try
+        {
+            if (DockingManager != null)
+            {
+                // Monitor layout changes
+                DockingManager.LayoutChanged += (s, e) =>
+                {
+                    // Force WebView2 controls to update their size
+                    Dispatcher.BeginInvoke(new Action(() =>
+                    {
+                        ForceWebView2SizeUpdate();
+                    }), System.Windows.Threading.DispatcherPriority.Loaded);
+                };
+                
+                AddToOutput("✓ DockingManager layout monitoring configured", LogSeverity.DEBUG);
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error setting up layout monitoring: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+
+    /// <summary>
+    /// Forces WebView2 controls to recalculate their size based on current parent container size
+    /// </summary>
+    private void ForceWebView2SizeUpdate()
+    {
+        try
+        {
+            var hvpParent = HvpBrowser?.Parent as Grid;
+            var jiraParent = JiraBrowser?.Parent as Grid;
+            
+            if (hvpParent != null && HvpBrowser != null && hvpParent.ActualHeight > 0)
+            {
+                double toolbarHeight = hvpParent.RowDefinitions[0].ActualHeight;
+                HvpBrowser.Height = Math.Max(100, hvpParent.ActualHeight - toolbarHeight - 5);
+            }
+            
+            if (jiraParent != null && JiraBrowser != null && jiraParent.ActualHeight > 0)
+            {
+                double toolbarHeight = jiraParent.RowDefinitions[0].ActualHeight;
+                JiraBrowser.Height = Math.Max(100, jiraParent.ActualHeight - toolbarHeight - 5);
+            }
+        }
+        catch
+        {
+            // Silently ignore errors
+        }
+    }
+
+    /// <summary>
+    /// Sets up dynamic sizing for WebView2 controls to properly handle layout changes
+    /// </summary>
+    private void SetupWebView2DynamicSizing()
+    {
+        try
+        {
+            // Find the parent Grids for both WebView2 controls
+            var hvpParent = HvpBrowser?.Parent as Grid;
+            var jiraParent = JiraBrowser?.Parent as Grid;
+            
+            if (hvpParent != null)
+            {
+                // When the parent Grid size changes, update the WebView2 height
+                hvpParent.SizeChanged += (s, e) =>
+                {
+                    if (HvpBrowser != null && e.NewSize.Height > 0)
+                    {
+                        // Get the toolbar height (row 0)
+                        double toolbarHeight = hvpParent.RowDefinitions[0].ActualHeight;
+                        // Set WebView2 height to remaining space
+                        HvpBrowser.Height = Math.Max(100, e.NewSize.Height - toolbarHeight - 5);
+                    }
+                };
+                
+                // Initial size
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (HvpBrowser != null && hvpParent.ActualHeight > 0)
+                    {
+                        double toolbarHeight = hvpParent.RowDefinitions[0].ActualHeight;
+                        HvpBrowser.Height = Math.Max(100, hvpParent.ActualHeight - toolbarHeight - 5);
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+            
+            if (jiraParent != null)
+            {
+                // When the parent Grid size changes, update the WebView2 height
+                jiraParent.SizeChanged += (s, e) =>
+                {
+                    if (JiraBrowser != null && e.NewSize.Height > 0)
+                    {
+                        // Get the toolbar height (row 0)
+                        double toolbarHeight = jiraParent.RowDefinitions[0].ActualHeight;
+                        // Set WebView2 height to remaining space
+                        JiraBrowser.Height = Math.Max(100, e.NewSize.Height - toolbarHeight - 5);
+                    }
+                };
+                
+                // Initial size
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    if (JiraBrowser != null && jiraParent.ActualHeight > 0)
+                    {
+                        double toolbarHeight = jiraParent.RowDefinitions[0].ActualHeight;
+                        JiraBrowser.Height = Math.Max(100, jiraParent.ActualHeight - toolbarHeight - 5);
+                    }
+                }), System.Windows.Threading.DispatcherPriority.Loaded);
+            }
+            
+            AddToOutput("✓ WebView2 dynamic sizing configured", LogSeverity.DEBUG);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error setting up WebView2 dynamic sizing: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+
+    /// <summary>
+    /// Reinitializes WebView2 content if browsers become blank
+    /// </summary>
+    private void ReinitializeWebViewContent()
+    {
+        try
+        {
+            Task.Run(async () =>
+            {
+                await Dispatcher.BeginInvoke(new Action(async () =>
+                {
+                    AddToOutput("🔄 Reinitializing WebView2 content...", LogSeverity.DEBUG);
+                    
+                    // Reinitialize HVP browser
+                    if (HvpBrowser != null)
+                    {
+                        InitializeWebView();
+                        AddToOutput("✓ HVP Browser content reinitialized", LogSeverity.DEBUG);
+                    }
+                    
+                    // Reinitialize Jira browser  
+                    if (JiraBrowser != null)
+                    {
+                        await InitializeJiraBrowser();
+                        AddToOutput("✓ Jira Browser content reinitialized", LogSeverity.DEBUG);
+                    }
+                }));
+            });
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error reinitializing WebView content: {ex.Message}", LogSeverity.WARNING);
+        }
+    }
+
+    /// <summary>
+    /// Sets up event handlers for WebView2 controls when they are loaded (currently disabled to avoid content issues)
+    /// </summary>
+    private void SetupWebViewLoadedEvents()
+    {
+        try
+        {
+            if (HvpBrowser != null)
+            {
+                // Only monitor size changes, don't trigger refreshes on load
+                HvpBrowser.SizeChanged += (sender, args) =>
+                {
+                    AddToOutput($"HVP Browser size changed to {args.NewSize}", LogSeverity.DEBUG);
+                };
+            }
+            
+            if (JiraBrowser != null)
+            {
+                // Only monitor size changes, don't trigger refreshes on load
+                JiraBrowser.SizeChanged += (sender, args) =>
+                {
+                    AddToOutput($"Jira Browser size changed to {args.NewSize}", LogSeverity.DEBUG);
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"⚠️ Error setting up WebView loaded events: {ex.Message}", LogSeverity.WARNING);
         }
     }
 
@@ -1211,6 +1431,9 @@ public partial class MainWindow : Window
                 // Use data binding instead of manual TreeViewItem creation
                 HvpTreeView.ItemsSource = new List<HierarchyNode> { rootHierarchy };
                 
+                // Expand root node automatically
+                ExpandHvpTreeRoot();
+                
                 LogToFile("TreeView updated with hierarchy data using data binding");
             });
             
@@ -1295,7 +1518,8 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Builds hierarchy from parsed data
+    /// Builds hierarchy from parsed data (for Code coverage only - NOT for Functional coverage)
+    /// Note: Functional coverage should use HvpNode objects from HvpHtmlParser, not this method
     /// </summary>
     private HierarchyNode BuildHierarchyFromParserData(List<HierarchyEntry> hierarchyData)
     {
@@ -1515,7 +1739,7 @@ public partial class MainWindow : Window
     {
         if (string.IsNullOrEmpty(ReleaseName) || string.IsNullOrEmpty(ReportName))
         {
-            ProjectInfoText.Text = "No project loaded";
+            // ProjectInfoText.Text = "No project loaded";
         }
         else
         {
@@ -1554,7 +1778,7 @@ public partial class MainWindow : Window
                 }
             }
             
-            ProjectInfoText.Text = $"Release: {ReleaseName} | Coverage: {displayCoverage} | Report: {ReportName} | Type: {displayReportType} | CL: {Changelist}{jiraInfo}";
+            // ProjectInfoText.Text = $"Release: {ReleaseName} | Coverage: {displayCoverage} | Report: {ReportName} | Type: {displayReportType} | CL: {Changelist}{jiraInfo}";
         }
     }
     
@@ -1771,7 +1995,10 @@ public partial class MainWindow : Window
         AddToOutput("Project loaded successfully");
         
         // Check if we need HTTP authentication first
-        if (RequiresHttpAuthentication() && _authenticatedHttpClient == null)
+        bool requiresAuth = RequiresHttpAuthentication();
+        AddToOutput($"🔍 DEBUG: RequiresHttpAuthentication={requiresAuth}, _authenticatedHttpClient={(_authenticatedHttpClient == null ? "NULL" : "SET")}", LogSeverity.DEBUG);
+        
+        if (requiresAuth && _authenticatedHttpClient == null)
         {
             AddToOutput("🔐 Project requires HTTP authentication - setting up credentials...");
             await PromptForHttpCredentials();
@@ -1799,9 +2026,8 @@ public partial class MainWindow : Window
         // Ensure Output panel is visible after loading
         EnsureOutputPanelVisible();
         
-        // Load Jira server automatically after authentication is available
-        // Call on UI thread to avoid thread ownership issues
-        _ = LoadJiraServerInBrowser();
+        // Note: Jira Story ticket will be loaded automatically after authentication completes
+        // in the SetupJiraIntegrationAsync method
     }
 
     #region Jira Browser Methods
@@ -1917,22 +2143,49 @@ public partial class MainWindow : Window
     {
         try
         {
+            AddToOutput($"🔍 DEBUG: LoadJiraServerInBrowser called, _currentProject={(_currentProject == null ? "NULL" : "SET")}", LogSeverity.DEBUG);
+            
             if (_currentProject == null || string.IsNullOrEmpty(_currentProject.JiraServer))
             {
                 AddToOutput("ℹ️ No Jira server configured in current project", LogSeverity.INFO);
                 return;
             }
 
-            // Check if Jira browser is initialized (must be done on UI thread)
+            // Wait for Jira browser to be initialized
             bool jiraBrowserReady = false;
-            await Dispatcher.InvokeAsync(() => {
-                jiraBrowserReady = JiraBrowser?.CoreWebView2 != null;
-            });
+            int initAttempts = 0;
+            
+            while (!jiraBrowserReady && initAttempts < 30) // Wait up to 30 seconds
+            {
+                await Dispatcher.InvokeAsync(() => {
+                    jiraBrowserReady = JiraBrowser?.CoreWebView2 != null;
+                });
+                
+                if (!jiraBrowserReady)
+                {
+                    if (initAttempts == 0)
+                    {
+                        AddToOutput("ℹ️ Waiting for Jira browser initialization...", LogSeverity.INFO);
+                    }
+                    
+                    await Task.Delay(1000);
+                    initAttempts++;
+                    
+                    if (initAttempts % 5 == 0)
+                    {
+                        AddToOutput($"⏳ Still waiting for Jira browser... ({initAttempts}/30 seconds)", LogSeverity.DEBUG);
+                    }
+                }
+            }
             
             if (!jiraBrowserReady)
             {
-                AddToOutput("⚠️ Jira browser not ready yet. It should initialize automatically.", LogSeverity.WARNING);
+                AddToOutput("⚠️ Jira browser initialization timeout after 30 seconds.", LogSeverity.WARNING);
                 return;
+            }
+            else
+            {
+                AddToOutput("✅ Jira browser initialized and ready!", LogSeverity.INFO);
             }
 
             if (_authenticatedHttpClient == null)
@@ -2020,6 +2273,154 @@ public partial class MainWindow : Window
         catch (Exception ex)
         {
             AddToOutput($"Error loading Jira server: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+
+    private async Task LoadJiraTicketInBrowser(string ticketUrl)
+    {
+        try
+        {
+            AddToOutput($"🔍 DEBUG: LoadJiraTicketInBrowser called with URL: {ticketUrl}", LogSeverity.DEBUG);
+            
+            if (string.IsNullOrEmpty(ticketUrl))
+            {
+                AddToOutput("⚠️ No ticket URL provided", LogSeverity.WARNING);
+                return;
+            }
+
+            // Ensure Jira browser is initialized, or initialize it now
+            bool jiraBrowserReady = false;
+            await Dispatcher.InvokeAsync(() => {
+                jiraBrowserReady = JiraBrowser?.CoreWebView2 != null;
+            });
+            
+            if (!jiraBrowserReady)
+            {
+                AddToOutput("🔄 Jira browser not initialized. Attempting direct initialization...", LogSeverity.INFO);
+                
+                try
+                {
+                    // Try direct initialization without tab switching
+                    await Dispatcher.InvokeAsync(async () => {
+                        if (JiraBrowser != null)
+                        {
+                            AddToOutput("🔍 DEBUG: Calling EnsureCoreWebView2Async directly", LogSeverity.DEBUG);
+                            await JiraBrowser.EnsureCoreWebView2Async();
+                        }
+                    });
+                    
+                    await Dispatcher.InvokeAsync(() => {
+                        jiraBrowserReady = JiraBrowser?.CoreWebView2 != null;
+                    });
+                    
+                    if (!jiraBrowserReady)
+                    {
+                        AddToOutput("⚠️ Direct initialization failed. WebView2 may require tab visibility.", LogSeverity.WARNING);
+                        AddToOutput("💡 Please switch to the Jira Browser tab once to initialize, then Story tickets will load automatically.", LogSeverity.INFO);
+                        return;
+                    }
+                    AddToOutput("✓ Jira browser initialized successfully", LogSeverity.INFO);
+                }
+                catch (Exception ex)
+                {
+                    AddToOutput($"❌ Error initializing Jira browser: {ex.Message}", LogSeverity.ERROR);
+                    AddToOutput("💡 Please switch to the Jira Browser tab once to initialize, then Story tickets will load automatically.", LogSeverity.INFO);
+                    return;
+                }
+            }
+            
+            AddToOutput($"✅ Jira browser is ready for navigation", LogSeverity.DEBUG);
+
+            if (_authenticatedHttpClient == null)
+            {
+                AddToOutput("ℹ️ Waiting for authentication to complete before loading Jira ticket...", LogSeverity.INFO);
+                int attempts = 0;
+                while (_authenticatedHttpClient == null && attempts < 60)
+                {
+                    await Task.Delay(1000);
+                    attempts++;
+                    
+                    if (attempts % 10 == 0)
+                    {
+                        AddToOutput($"⏳ Still waiting for authentication... ({attempts}/60 seconds)", LogSeverity.DEBUG);
+                    }
+                }
+                
+                if (_authenticatedHttpClient == null)
+                {
+                    AddToOutput("⚠️ Authentication timeout. Jira ticket not loaded.", LogSeverity.WARNING);
+                    return;
+                }
+                else
+                {
+                    AddToOutput($"✅ Authentication is available!", LogSeverity.DEBUG);
+                }
+            }
+
+            AddToOutput($"🌐 Loading Jira ticket: {ticketUrl}", LogSeverity.INFO);
+            AddToOutput($"🔍 DEBUG: Invoking on Dispatcher to navigate browser...", LogSeverity.DEBUG);
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                // Clean up existing event handlers
+                if (_currentJiraNavigationHandler != null && JiraBrowser?.CoreWebView2 != null)
+                {
+                    JiraBrowser.CoreWebView2.NavigationCompleted -= _currentJiraNavigationHandler;
+                }
+                if (_currentJiraDOMHandler != null && JiraBrowser?.CoreWebView2 != null)
+                {
+                    JiraBrowser.CoreWebView2.DOMContentLoaded -= _currentJiraDOMHandler;
+                }
+
+                // Create new navigation handlers
+                _currentJiraNavigationHandler = (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (args.IsSuccess)
+                        {
+                            AddToOutput($"✅ Jira ticket loaded successfully", LogSeverity.INFO);
+                        }
+                        else
+                        {
+                            AddToOutput($"❌ Failed to load Jira ticket: {args.WebErrorStatus}", LogSeverity.ERROR);
+                        }
+                    });
+                };
+
+                _currentJiraDOMHandler = (sender, args) =>
+                {
+                    Dispatcher.Invoke(() =>
+                    {
+                        AddToOutput("✓ Jira ticket DOM loaded", LogSeverity.DEBUG);
+                    });
+                };
+
+                // Attach event handlers and navigate
+                if (JiraBrowser?.CoreWebView2 != null)
+                {
+                    AddToOutput($"🔍 DEBUG: JiraBrowser.CoreWebView2 is not null, attaching handlers and navigating...", LogSeverity.DEBUG);
+                    JiraBrowser.CoreWebView2.NavigationCompleted += _currentJiraNavigationHandler;
+                    JiraBrowser.CoreWebView2.DOMContentLoaded += _currentJiraDOMHandler;
+                    
+                    // Update address bar
+                    JiraAddressBar.Text = ticketUrl;
+                    
+                    // Navigate to Jira ticket
+                    JiraBrowser.CoreWebView2.Navigate(ticketUrl);
+                    AddToOutput($"🔍 DEBUG: Navigate() called successfully", LogSeverity.DEBUG);
+                }
+                else
+                {
+                    AddToOutput($"⚠️ JiraBrowser.CoreWebView2 is null, cannot navigate!", LogSeverity.WARNING);
+                }
+            });
+            
+            AddToOutput($"➡️ Navigating to Jira ticket: {ticketUrl}");
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error loading Jira ticket: {ex.Message}", LogSeverity.ERROR);
         }
     }
 
@@ -2231,6 +2632,29 @@ public partial class MainWindow : Window
         {
             AddToOutput($"Loading hierarchy from project: {hierarchyFilePath}");
             
+            // Check coverage type to determine loading method
+            if (_currentProject?.GetCoverageTypeString() == "func_cov")
+            {
+                AddToOutput("📋 Functional coverage project - using HvpNode-based loading...");
+                
+                // For functional coverage, use the HvpHtmlParser approach
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await AutoLoadHvpData();
+                    }
+                    catch (Exception ex)
+                    {
+                        Dispatcher.Invoke(() => AddToOutput($"Error auto-loading HVP data: {ex.Message}"));
+                    }
+                });
+                return;
+            }
+            
+            // For other coverage types (Code coverage), use file-based HierarchyNode approach
+            AddToOutput("📋 Code coverage project - using file-based loading...");
+            
             var hierarchyData = ParseHierarchyFile(hierarchyFilePath);
             var rootHierarchy = BuildHierarchyFromParserData(hierarchyData);
             
@@ -2238,8 +2662,11 @@ public partial class MainWindow : Window
             HvpTreeView.Items.Clear();
             rootHierarchy.IsExpanded = true;
             
-            // Use data binding instead of manual TreeViewItem creation
+            // Use data binding for HierarchyNode (Code coverage)
             HvpTreeView.ItemsSource = new List<HierarchyNode> { rootHierarchy };
+            
+            // Expand root node automatically
+            ExpandHvpTreeRoot();
             
             StatusText.Text = $"Loaded project: {_currentProject?.ProjectName}";
             AddToOutput("✓ Project hierarchy loaded successfully");
@@ -2448,19 +2875,20 @@ public partial class MainWindow : Window
                 _authenticatedHttpClient != null &&
                 !string.IsNullOrEmpty(_currentProject.JiraProject))
             {
-                // Dispose existing JiraApi if any
-                _jiraApi?.Dispose();
+                // Don't dispose _jiraApi or _authenticatedHttpClient - they need to remain available for the entire app lifecycle
+                // Reset ticket references and create JiraAPI instance if needed
                 _jiraEpicTicket = null;
                 _jiraStoryTicket = null;
                 
-                // Using JiraAPI v1.0.2 with HttpClient parameter
+                // Using JiraAPI v1.0.3 with HttpClient parameter
                 // Constructor: JiraApi(string serverUrl = null, string user = null, string password = null, bool mockingModeEnable = false, HttpClient httpClient = null)
                 // When HttpClient is provided, user and password are not needed as authentication is handled by HttpClient
+                // Note: Both JiraAPI and HttpClient must remain alive for the entire application lifecycle
                 _jiraApi = new JiraApi(
                     serverUrl: _currentProject.JiraServer,
                     user: null!,
                     password: null!,
-                    mockingModeEnable: true,
+                    mockingModeEnable: false,
                     httpClient: _authenticatedHttpClient!);
                 
                 var authType = string.IsNullOrEmpty(_httpPassword) ? "Windows Authentication" : "Basic Authentication";
@@ -2530,7 +2958,7 @@ public partial class MainWindow : Window
                 // Create or get Epic ticket
                 if (!string.IsNullOrEmpty(_currentProject.JiraEpic) && _jiraApi != null && _currentProject != null)
                 {
-                    AddToOutput($"Creating/getting Epic ticket: {_currentProject.JiraEpic}");
+                    AddToOutput($"Creating/getting Epic ticket: {_currentProject.JiraProject} {_currentProject.JiraEpic}");
                     try
                     {
                         _jiraEpicTicket = await _jiraApi.GetOrCreateEpic(_currentProject.JiraProject, _currentProject.JiraEpic);
@@ -2563,17 +2991,54 @@ public partial class MainWindow : Window
                     AddToOutput($"Creating/getting Story ticket: {_currentProject.JiraStory}");
                     try
                     {
+                        // Check if _jiraApi is still valid (not disposed)
+                        if (_jiraApi == null)
+                        {
+                            AddToOutput("⚠️ JiraAPI instance is null, cannot create Story ticket", LogSeverity.WARNING);
+                            return;
+                        }
+                        
                         // First create/get Epic to use as epicLink
                         string epicTicketKey = _jiraEpicTicket != null ? _jiraApi.GetIssueKey(_jiraEpicTicket) : _currentProject.JiraEpic;
                         _jiraStoryTicket = await _jiraApi.GetOrCreateStory(_currentProject.JiraProject, _currentProject.JiraStory, _currentProject.JiraStory, epicTicketKey);
                         if (_jiraStoryTicket != null)
                         {
-                            AddToOutput($"✓ Story ticket ready: {_currentProject.JiraStory}", LogSeverity.INFO);
+                            string storyKey = _jiraApi.GetIssueKey(_jiraStoryTicket);
+                            AddToOutput($"✓ Story ticket ready: {storyKey}", LogSeverity.INFO);
+                            
+                            // Load the Story ticket link in Jira browser using IssueKeyToLink
+                            try
+                            {
+                                string storyLink = _jiraApi.IssueKeyToLink(storyKey);
+                                AddToOutput($"🔗 Story ticket link: {storyLink}", LogSeverity.INFO);
+                                AddToOutput($"🔍 DEBUG: About to call LoadJiraTicketInBrowser with link: {storyLink}", LogSeverity.DEBUG);
+                                
+                                // Await the task to ensure it completes and catch any errors
+                                await LoadJiraTicketInBrowser(storyLink);
+                            }
+                            catch (ObjectDisposedException ode)
+                            {
+                                AddToOutput($"⚠️ JiraAPI was disposed, cannot get Story ticket link: {ode.Message}", LogSeverity.WARNING);
+                            }
+                            catch (Exception linkEx)
+                            {
+                                AddToOutput($"⚠️ Error loading Story ticket in browser: {linkEx.Message}", LogSeverity.WARNING);
+                                AddToOutput($"🔍 DEBUG: Exception type: {linkEx.GetType().Name}", LogSeverity.DEBUG);
+                                if (linkEx.InnerException != null)
+                                {
+                                    AddToOutput($"🔍 DEBUG: Inner exception: {linkEx.InnerException.Message}", LogSeverity.DEBUG);
+                                }
+                            }
                         }
                         else
                         {
                             AddToOutput($"⚠ Failed to create/get Story ticket: {_currentProject.JiraStory}", LogSeverity.WARNING);
                         }
+                    }
+                    catch (ObjectDisposedException ode)
+                    {
+                        AddToOutput($"⚠️ JiraAPI was disposed: {ode.Message}", LogSeverity.WARNING);
+                        AddToOutput($"💡 Try reloading the project or restarting the application", LogSeverity.INFO);
                     }
                     catch (HttpRequestException httpEx) when (httpEx.Message.Contains("404"))
                     {
@@ -2586,6 +3051,10 @@ public partial class MainWindow : Window
                     catch (Exception ex)
                     {
                         AddToOutput($"⚠️ Error creating/getting Story ticket: {ex.GetType().Name}: {ex.Message}", LogSeverity.WARNING);
+                        if (ex.InnerException != null)
+                        {
+                            AddToOutput($"   Inner exception: {ex.InnerException.Message}", LogSeverity.DEBUG);
+                        }
                     }
                 }
                 
@@ -3092,7 +3561,461 @@ public partial class MainWindow : Window
     private void SetLightTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Light theme selected");
     private void SetDarkTheme_Click(object sender, RoutedEventArgs e) => AddToOutput("Dark theme selected");
     private void RunCoverageAnalysis_Click(object sender, RoutedEventArgs e) => AddToOutput("Run Coverage Analysis clicked");
-    private void CreateJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Create Jira clicked");
+    
+    private void CreateJira_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            // Determine which tab is currently active
+            var selectedTab = ExplorerTabControl.SelectedIndex;
+            TreeView? activeTreeView = null;
+            string tabName = "";
+            
+            if (selectedTab == 0) // HVP tab
+            {
+                activeTreeView = HvpTreeView;
+                tabName = "HVP";
+            }
+            else if (selectedTab == 1) // Stats tab
+            {
+                activeTreeView = StatsTreeView;
+                tabName = "Stats";
+            }
+            
+            if (activeTreeView == null)
+            {
+                AddToOutput("⚠️ No active TreeView found", LogSeverity.WARNING);
+                return;
+            }
+            
+            AddToOutput($"🔍 DEBUG: Collecting checked nodes from {tabName} tab", LogSeverity.DEBUG);
+            
+            // Collect all checked nodes - handle both ItemsSource and Items collections
+            var checkedNodes = new List<HierarchyNode>();
+            
+            // Try ItemsSource first (used by HvpTreeView when set programmatically)
+            if (activeTreeView.ItemsSource is IEnumerable<HierarchyNode> itemsSource)
+            {
+                AddToOutput($"🔍 DEBUG: Using ItemsSource, items count: {itemsSource.Count()}", LogSeverity.DEBUG);
+                CollectCheckedNodes(itemsSource, checkedNodes);
+            }
+            // Fall back to Items collection
+            else if (activeTreeView.Items.Count > 0)
+            {
+                AddToOutput($"🔍 DEBUG: Using Items collection, items count: {activeTreeView.Items.Count}", LogSeverity.DEBUG);
+                
+                // Use visual tree to get actual TreeViewItems and find checked checkboxes
+                var treeViewItems = GetAllTreeViewItems(activeTreeView);
+                AddToOutput($"🔍 DEBUG: Found {treeViewItems.Count} TreeViewItem controls", LogSeverity.DEBUG);
+                
+                // Build hierarchical structure of checked nodes
+                var processedItems = new HashSet<TreeViewItem>();
+                
+                foreach (var treeViewItem in treeViewItems)
+                {
+                    if (processedItems.Contains(treeViewItem))
+                        continue;
+                        
+                    // Check the checkbox state directly since HvpNode objects don't have IsSelected
+                    var checkbox = FindVisualChild<CheckBox>(treeViewItem);
+                    if (checkbox != null && checkbox.IsChecked == true)
+                    {
+                        // Get the HvpNode data from Tag property (where it's stored)
+                        var hvpNodeData = treeViewItem.Tag;
+                        if (hvpNodeData != null)
+                        {
+                            var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                            AddToOutput($"✓ Added checked HvpNode: {nodeName}", LogSeverity.DEBUG);
+                            
+                            // Create a HierarchyNode wrapper with ALL children (not just checked ones)
+                            var wrapperNode = CreateHierarchyNodeFromHvp(hvpNodeData);
+                            CollectAllChildren(treeViewItem, wrapperNode, processedItems);
+                            checkedNodes.Add(wrapperNode);
+                        }
+                    }
+                    
+                    processedItems.Add(treeViewItem);
+                }
+            }
+            else
+            {
+                AddToOutput("🔍 DEBUG: No items found in TreeView", LogSeverity.DEBUG);
+            }
+            
+            AddToOutput($"🔍 DEBUG: Found {checkedNodes.Count} checked nodes", LogSeverity.DEBUG);
+            
+            if (checkedNodes.Count == 0)
+            {
+                AddToOutput("⚠️ No nodes are checked. Please select nodes before creating Jira.", LogSeverity.WARNING);
+                return;
+            }
+            
+            // Format the output with enhanced table structure
+            AddToOutput("╔════════════════════════════════════════════════════════════════════════════════╗", LogSeverity.INFO);
+            AddToOutput($"║  Create Jira - Checked Nodes from {tabName} Tab ({checkedNodes.Count} items)                    ║", LogSeverity.INFO);
+            AddToOutput("╠════════════════════════════════════════════════════════════════════════════════╣", LogSeverity.INFO);
+            
+            for (int i = 0; i < checkedNodes.Count; i++)
+            {
+                var node = checkedNodes[i];
+                FormatNodeOutput(node, 0, i + 1);
+                
+                if (i < checkedNodes.Count - 1)
+                {
+                    AddToOutput("║────────────────────────────────────────────────────────────────────────────────║", LogSeverity.INFO);
+                }
+            }
+            
+            AddToOutput("╚════════════════════════════════════════════════════════════════════════════════╝", LogSeverity.INFO);
+            AddToOutput($"✅ Total checked nodes: {checkedNodes.Count}", LogSeverity.INFO);
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"❌ Error collecting checked nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Recursively collects all checked nodes from a hierarchy
+    /// </summary>
+    private void CollectCheckedNodes(IEnumerable<HierarchyNode>? nodes, List<HierarchyNode> checkedNodes, int depth = 0)
+    {
+        if (nodes == null) 
+        {
+            AddToOutput($"🔍 DEBUG: nodes is null at depth {depth}", LogSeverity.DEBUG);
+            return;
+        }
+        
+        var nodesList = nodes.ToList();
+        AddToOutput($"🔍 DEBUG: Processing {nodesList.Count} nodes at depth {depth}", LogSeverity.DEBUG);
+        
+        foreach (var node in nodesList)
+        {
+            AddToOutput($"🔍 DEBUG: Node '{node.Name}' - IsSelected: {node.IsSelected}, Children: {node.Children?.Count ?? 0}", LogSeverity.DEBUG);
+            
+            if (node.IsSelected)
+            {
+                checkedNodes.Add(node);
+                AddToOutput($"✓ Added checked node: {node.Name}", LogSeverity.DEBUG);
+            }
+            
+            // Recursively check children
+            if (node.Children != null && node.Children.Count > 0)
+            {
+                CollectCheckedNodes(node.Children, checkedNodes, depth + 1);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Gets all TreeViewItem controls from a TreeView using visual tree traversal
+    /// </summary>
+    private List<TreeViewItem> GetAllTreeViewItems(TreeView treeView)
+    {
+        var items = new List<TreeViewItem>();
+        
+        for (int i = 0; i < treeView.Items.Count; i++)
+        {
+            var container = treeView.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                items.Add(container);
+                GetTreeViewItemsRecursive(container, items);
+            }
+        }
+        
+        return items;
+    }
+    
+    /// <summary>
+    /// Recursively gets all child TreeViewItem controls
+    /// </summary>
+    private void GetTreeViewItemsRecursive(TreeViewItem item, List<TreeViewItem> items)
+    {
+        for (int i = 0; i < item.Items.Count; i++)
+        {
+            var container = item.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (container != null)
+            {
+                items.Add(container);
+                GetTreeViewItemsRecursive(container, items);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Formats a node with proper indentation and HvpNode metrics
+    /// </summary>
+    private void FormatNodeOutput(HierarchyNode node, int indentLevel, int? nodeNumber = null)
+    {
+        string indent = new string(' ', indentLevel * 2);
+        string nodePrefix = nodeNumber.HasValue ? $"[{nodeNumber}] " : "";
+        
+        // Node header
+        AddToOutput($"{indent}{nodePrefix}{node.Name}", LogSeverity.INFO);
+        
+        // HvpNode specific metrics - simple key: value format
+        var hvpData = node.HvpNodeData;
+        if (hvpData != null)
+        {
+            var score = GetHvpNodeProperty(hvpData, "SCORE")?.ToString() ?? "0";
+            var assert = GetHvpNodeProperty(hvpData, "ASSERT")?.ToString() ?? "";
+            var assertFraction = GetHvpNodeProperty(hvpData, "ASSERT_FRACTION")?.ToString() ?? "";
+            var group = GetHvpNodeProperty(hvpData, "GROUP")?.ToString() ?? "0";
+            var groupFraction = GetHvpNodeProperty(hvpData, "GROUP_FRACTION")?.ToString() ?? "";
+            var test = GetHvpNodeProperty(hvpData, "test")?.ToString() ?? "0";
+            var pass = GetHvpNodeProperty(hvpData, "pass")?.ToString() ?? "0";
+            var fail = GetHvpNodeProperty(hvpData, "fail")?.ToString() ?? "0";
+            var warn = GetHvpNodeProperty(hvpData, "warn")?.ToString() ?? "0";
+            var assertCount = GetHvpNodeProperty(hvpData, "assert")?.ToString() ?? "0";
+            var unknown = GetHvpNodeProperty(hvpData, "unknown")?.ToString() ?? "0";
+            var hyperlink = GetHvpNodeProperty(hvpData, "Hyperlink")?.ToString() ?? "";
+            
+            AddToOutput($"{indent}  Score: {score}", LogSeverity.INFO);
+            AddToOutput($"{indent}  Assert: {assert}", LogSeverity.INFO);
+            AddToOutput($"{indent}  Assert_Fraction: {assertFraction}", LogSeverity.INFO);
+            AddToOutput($"{indent}  Group: {group}", LogSeverity.INFO);
+            AddToOutput($"{indent}  Group_Fraction: {groupFraction}", LogSeverity.INFO);
+            AddToOutput($"{indent}  Tests: {test} total", LogSeverity.INFO);
+            AddToOutput($"{indent}  Pass/Fail/Warn/Assert/Unknown: {pass}/{fail}/{warn}/{assertCount}/{unknown}", LogSeverity.INFO);
+            
+            if (!string.IsNullOrEmpty(hyperlink))
+            {
+                string reportPath = _currentProject?.ReportPath ?? "";
+                string fullLink = string.IsNullOrEmpty(reportPath) ? hyperlink : $"{reportPath}/{hyperlink}";
+                AddToOutput($"{indent}  Link: {fullLink}", LogSeverity.INFO);
+            }
+        }
+        
+        // Show children if any
+        if (node.Children != null && node.Children.Count > 0)
+        {
+            string childIndent = new string(' ', (indentLevel + 1) * 2);
+            
+            for (int i = 0; i < node.Children.Count; i++)
+            {
+                var child = node.Children[i];
+                bool isLastChild = i == node.Children.Count - 1;
+                
+                // Branch connector for each child
+                if (isLastChild)
+                {
+                    // Last child uses └───
+                    AddToOutput($"{childIndent}└─── {child.Name}", LogSeverity.INFO);
+                }
+                else
+                {
+                    // Other children use ├───
+                    AddToOutput($"{childIndent}├─── {child.Name}", LogSeverity.INFO);
+                }
+                
+                // Show child metrics with additional indentation
+                var childHvpData = child.HvpNodeData;
+                if (childHvpData != null)
+                {
+                    string metricsIndent = childIndent + (isLastChild ? "     " : "│    ");
+                    
+                    var score = GetHvpNodeProperty(childHvpData, "SCORE")?.ToString() ?? "0";
+                    var assert = GetHvpNodeProperty(childHvpData, "ASSERT")?.ToString() ?? "";
+                    var assertFraction = GetHvpNodeProperty(childHvpData, "ASSERT_FRACTION")?.ToString() ?? "";
+                    var group = GetHvpNodeProperty(childHvpData, "GROUP")?.ToString() ?? "0";
+                    var groupFraction = GetHvpNodeProperty(childHvpData, "GROUP_FRACTION")?.ToString() ?? "";
+                    var test = GetHvpNodeProperty(childHvpData, "test")?.ToString() ?? "0";
+                    var pass = GetHvpNodeProperty(childHvpData, "pass")?.ToString() ?? "0";
+                    var fail = GetHvpNodeProperty(childHvpData, "fail")?.ToString() ?? "0";
+                    var warn = GetHvpNodeProperty(childHvpData, "warn")?.ToString() ?? "0";
+                    var assertCount = GetHvpNodeProperty(childHvpData, "assert")?.ToString() ?? "0";
+                    var unknown = GetHvpNodeProperty(childHvpData, "unknown")?.ToString() ?? "0";
+                    var hyperlink = GetHvpNodeProperty(childHvpData, "Hyperlink")?.ToString() ?? "";
+                    
+                    AddToOutput($"{metricsIndent}Score: {score}", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Assert: {assert}", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Assert_Fraction: {assertFraction}", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Group: {group}", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Group_Fraction: {groupFraction}", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Tests: {test} total", LogSeverity.INFO);
+                    AddToOutput($"{metricsIndent}Pass/Fail/Warn/Assert/Unknown: {pass}/{fail}/{warn}/{assertCount}/{unknown}", LogSeverity.INFO);
+                    
+                    if (!string.IsNullOrEmpty(hyperlink))
+                    {
+                        string reportPath = _currentProject?.ReportPath ?? "";
+                        string fullLink = string.IsNullOrEmpty(reportPath) ? hyperlink : $"{reportPath}/{hyperlink}";
+                        AddToOutput($"{metricsIndent}Link: {fullLink}", LogSeverity.INFO);
+                    }
+                    
+                    // Recursively handle grandchildren
+                    if (child.Children != null && child.Children.Count > 0)
+                    {
+                        HandleChildrenTreeStructure(child, metricsIndent, isLastChild);
+                    }
+                }
+            }
+        }
+        
+        // Separator between top-level nodes
+        if (indentLevel == 0)
+        {
+            AddToOutput("═════════════════════════════════════════════════════════════════════════════════", LogSeverity.INFO);
+        }
+    }
+    
+    /// <summary>
+    /// Helper to truncate and pad values for table formatting
+    /// </summary>
+    private string TruncateValue(string value, int maxLength)
+    {
+        if (string.IsNullOrEmpty(value)) return new string(' ', maxLength);
+        return value.Length > maxLength ? value.Substring(0, maxLength - 3) + "..." : value.PadRight(maxLength);
+    }
+    
+    /// <summary>
+    /// Get property value from HvpNode using reflection
+    /// </summary>
+    private object? GetHvpNodeProperty(object hvpNode, string propertyName)
+    {
+        try
+        {
+            var property = hvpNode.GetType().GetProperty(propertyName);
+            return property?.GetValue(hvpNode);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Create a HierarchyNode wrapper from HvpNode data
+    /// </summary>
+    private HierarchyNode CreateHierarchyNodeFromHvp(object hvpNodeData)
+    {
+        var name = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+        var hyperlink = GetHvpNodeProperty(hvpNodeData, "Hyperlink")?.ToString() ?? "";
+        
+        var wrapper = new HierarchyNode(name, "")
+        {
+            Link = hyperlink,
+            HvpNodeData = hvpNodeData // Store reference to original data
+        };
+        
+        return wrapper;
+    }
+    
+    /// <summary>
+    /// Handle children with proper tree structure display
+    /// </summary>
+    private void HandleChildrenTreeStructure(HierarchyNode parentNode, string parentIndent, bool isParentLast)
+    {
+        if (parentNode.Children == null || parentNode.Children.Count == 0)
+            return;
+            
+        for (int i = 0; i < parentNode.Children.Count; i++)
+        {
+            var child = parentNode.Children[i];
+            bool isLastChild = i == parentNode.Children.Count - 1;
+            
+            string childIndent = parentIndent + (isLastChild ? "└─── " : "├─── ");
+            AddToOutput($"{childIndent}{child.Name}", LogSeverity.INFO);
+            
+            // Show child metrics
+            var childHvpData = child.HvpNodeData;
+            if (childHvpData != null)
+            {
+                string metricsIndent = parentIndent + (isLastChild ? "     " : "│    ");
+                
+                var score = GetHvpNodeProperty(childHvpData, "SCORE")?.ToString() ?? "0";
+                var assert = GetHvpNodeProperty(childHvpData, "ASSERT")?.ToString() ?? "";
+                var assertFraction = GetHvpNodeProperty(childHvpData, "ASSERT_FRACTION")?.ToString() ?? "";
+                var group = GetHvpNodeProperty(childHvpData, "GROUP")?.ToString() ?? "0";
+                var groupFraction = GetHvpNodeProperty(childHvpData, "GROUP_FRACTION")?.ToString() ?? "";
+                var test = GetHvpNodeProperty(childHvpData, "test")?.ToString() ?? "0";
+                var pass = GetHvpNodeProperty(childHvpData, "pass")?.ToString() ?? "0";
+                var fail = GetHvpNodeProperty(childHvpData, "fail")?.ToString() ?? "0";
+                var warn = GetHvpNodeProperty(childHvpData, "warn")?.ToString() ?? "0";
+                var assertCount = GetHvpNodeProperty(childHvpData, "assert")?.ToString() ?? "0";
+                var unknown = GetHvpNodeProperty(childHvpData, "unknown")?.ToString() ?? "0";
+                var hyperlink = GetHvpNodeProperty(childHvpData, "Hyperlink")?.ToString() ?? "";
+                
+                AddToOutput($"{metricsIndent}Score: {score}", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Assert: {assert}", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Assert_Fraction: {assertFraction}", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Group: {group}", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Group_Fraction: {groupFraction}", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Tests: {test} total", LogSeverity.INFO);
+                AddToOutput($"{metricsIndent}Pass/Fail/Warn/Assert/Unknown: {pass}/{fail}/{warn}/{assertCount}/{unknown}", LogSeverity.INFO);
+                
+                if (!string.IsNullOrEmpty(hyperlink))
+                {
+                    string reportPath = _currentProject?.ReportPath ?? "";
+                    string fullLink = string.IsNullOrEmpty(reportPath) ? hyperlink : $"{reportPath}/{hyperlink}";
+                    AddToOutput($"{metricsIndent}Link: {fullLink}", LogSeverity.INFO);
+                }
+                
+                // Recursively handle deeper levels
+                if (child.Children != null && child.Children.Count > 0)
+                {
+                    HandleChildrenTreeStructure(child, metricsIndent, isLastChild);
+                }
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Collect ALL children from TreeViewItem hierarchy (not just checked ones)
+    /// </summary>
+    private void CollectAllChildren(TreeViewItem parentItem, HierarchyNode parentNode, HashSet<TreeViewItem> processedItems)
+    {
+        for (int i = 0; i < parentItem.Items.Count; i++)
+        {
+            var childContainer = parentItem.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (childContainer != null && !processedItems.Contains(childContainer))
+            {
+                var childHvpData = childContainer.Tag;
+                if (childHvpData != null)
+                {
+                    var childName = GetHvpNodeProperty(childHvpData, "NAME")?.ToString() ?? "Unknown";
+                    AddToOutput($"  ✓ Added child: {childName}", LogSeverity.DEBUG);
+                    
+                    var childWrapper = CreateHierarchyNodeFromHvp(childHvpData);
+                    CollectAllChildren(childContainer, childWrapper, processedItems);
+                    parentNode.Children.Add(childWrapper);
+                }
+                
+                processedItems.Add(childContainer);
+            }
+        }
+    }
+    
+    /// <summary>
+    /// Collect checked children from TreeViewItem hierarchy
+    /// </summary>
+    private void CollectCheckedChildren(TreeViewItem parentItem, HierarchyNode parentNode, HashSet<TreeViewItem> processedItems)
+    {
+        for (int i = 0; i < parentItem.Items.Count; i++)
+        {
+            var childContainer = parentItem.ItemContainerGenerator.ContainerFromIndex(i) as TreeViewItem;
+            if (childContainer != null && !processedItems.Contains(childContainer))
+            {
+                var checkbox = FindVisualChild<CheckBox>(childContainer);
+                if (checkbox != null && checkbox.IsChecked == true)
+                {
+                    var childHvpData = childContainer.Tag;
+                    if (childHvpData != null)
+                    {
+                        var childName = GetHvpNodeProperty(childHvpData, "NAME")?.ToString() ?? "Unknown";
+                        AddToOutput($"  ✓ Added checked child: {childName}", LogSeverity.DEBUG);
+                        
+                        var childWrapper = CreateHierarchyNodeFromHvp(childHvpData);
+                        CollectCheckedChildren(childContainer, childWrapper, processedItems);
+                        parentNode.Children.Add(childWrapper);
+                    }
+                }
+                
+                processedItems.Add(childContainer);
+            }
+        }
+    }
+    
     private void AddToWaiver_Click(object sender, RoutedEventArgs e) => AddToOutput("Add to Waiver clicked");
     private void Options_Click(object sender, RoutedEventArgs e)
     {
@@ -3138,7 +4061,12 @@ public partial class MainWindow : Window
     private void About_Click(object sender, RoutedEventArgs e) => MessageBox.Show("Coverage Analyzer GUI\nVersion 1.0", "About");
 
     // Context Menu Event Handlers
-    private void ContextMenu_CreateJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Create Jira clicked");
+    private void ContextMenu_CreateJira_Click(object sender, RoutedEventArgs e)
+    {
+        // Use the same logic as the toolbar button
+        CreateJira_Click(sender, e);
+    }
+    
     private void ContextMenu_ShowJira_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Show Jira clicked");
     private void ContextMenu_AddToWaiver_Click(object sender, RoutedEventArgs e) => AddToOutput("Context Menu: Add to Waiver clicked");
     
@@ -3260,16 +4188,30 @@ public partial class MainWindow : Window
                         // Ensure UI update happens on UI thread
                         if (Dispatcher.CheckAccess())
                         {
+                            // Clear previous selection state
+                            _selectedTreeViewItems.Clear();
+                            _selectedHvpNodes.Clear();
+                            
                             HvpTreeView.Items.Clear();
                             HvpTreeView.ItemsSource = treeItems;
                             AddToOutput($"✓ Auto-loaded {treeItems.Count} items in TreeView");
+                            
+                            // Expand root node automatically
+                            ExpandHvpTreeRoot();
                         }
                         else
                         {
                             Dispatcher.Invoke(() => {
+                                // Clear previous selection state
+                                _selectedTreeViewItems.Clear();
+                                _selectedHvpNodes.Clear();
+                                
                                 HvpTreeView.Items.Clear();
                                 HvpTreeView.ItemsSource = treeItems;
                                 AddToOutput($"✓ Auto-loaded {treeItems.Count} items in TreeView");
+                                
+                                // Expand root node automatically
+                                ExpandHvpTreeRoot();
                             });
                         }
                         
@@ -3468,6 +4410,12 @@ public partial class MainWindow : Window
                                 HvpTreeView.Items.Clear();
                                 HvpTreeView.ItemsSource = treeItems;
                                 // TreeView populated successfully
+                                
+                                // Expand root node automatically
+                                ExpandHvpTreeRoot();
+                                
+                                // Expand root node automatically
+                                ExpandHvpTreeRoot();
                             }
                             else
                             {
@@ -4058,9 +5006,64 @@ public partial class MainWindow : Window
             }
         }
         
+        // Add expansion event handler to apply stored selection state when expanded
+        treeItem.Expanded += TreeViewItem_Expanded;
+        
+        // Apply stored selection state if this node should be selected
+        ApplyStoredSelectionState(treeItem);
+        
         return treeItem;
     }
 
+    /// <summary>
+    /// Expand the root TreeViewItem in HvpTreeView after data is loaded
+    /// </summary>
+    private void ExpandHvpTreeRoot()
+    {
+        try
+        {
+            // Use a small delay to ensure TreeViewItems are generated
+            Task.Delay(100).ContinueWith(_ => 
+            {
+                Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    try
+                    {
+                        if (HvpTreeView.Items.Count > 0)
+                        {
+                            // Get the first (root) TreeViewItem
+                            var rootContainer = HvpTreeView.ItemContainerGenerator.ContainerFromIndex(0) as TreeViewItem;
+                            if (rootContainer != null)
+                            {
+                                rootContainer.IsExpanded = true;
+                                AddToOutput("📂 Root node expanded automatically", LogSeverity.DEBUG);
+                            }
+                            else
+                            {
+                                // If container isn't ready yet, try to force generation
+                                HvpTreeView.UpdateLayout();
+                                rootContainer = HvpTreeView.ItemContainerGenerator.ContainerFromIndex(0) as TreeViewItem;
+                                if (rootContainer != null)
+                                {
+                                    rootContainer.IsExpanded = true;
+                                    AddToOutput("📂 Root node expanded automatically (delayed)", LogSeverity.DEBUG);
+                                }
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        AddToOutput($"Error expanding root node: {ex.Message}", LogSeverity.ERROR);
+                    }
+                }));
+            });
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error setting up root expansion: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
     /// <summary>
     /// Synchronize header scroll with tree scroll for table alignment
     /// </summary>
@@ -4091,23 +5094,69 @@ public partial class MainWindow : Window
     {
         try
         {
-            // Find the TreeScrollViewer and forward the mouse wheel event to it
-            var treeScrollViewer = FindName("TreeScrollViewer") as ScrollViewer;
-            if (treeScrollViewer != null)
+            // Find the ScrollViewer that wraps the TreeView
+            ScrollViewer? scrollViewer = null;
+            
+            // First try to find the ScrollViewer parent of the TreeView
+            if (sender is TreeView treeView)
             {
-                // Calculate scroll amount (increased for faster scrolling)
-                double scrollAmount = -e.Delta / 3.0; // Faster scroll: ~8 lines per wheel click
+                scrollViewer = FindScrollViewerParent(treeView);
+            }
+            
+            // If we found the ScrollViewer, handle the scrolling
+            if (scrollViewer != null)
+            {
+                // Calculate scroll amount (3 lines per wheel notch for smooth scrolling)
+                double scrollAmount = -e.Delta / 120.0 * 48.0; // 48 pixels per wheel notch (about 3 lines)
+                
+                // Apply the scroll offset
+                double newOffset = scrollViewer.VerticalOffset + scrollAmount;
+                
+                // Clamp to valid range
+                newOffset = Math.Max(0, Math.Min(newOffset, scrollViewer.ScrollableHeight));
                 
                 // Scroll vertically
-                treeScrollViewer.ScrollToVerticalOffset(treeScrollViewer.VerticalOffset + scrollAmount);
+                scrollViewer.ScrollToVerticalOffset(newOffset);
                 
                 // Mark event as handled so it doesn't bubble up
                 e.Handled = true;
+                
+                LogToFile($"TreeView mouse wheel: Delta={e.Delta}, ScrollAmount={scrollAmount:F1}, NewOffset={newOffset:F1}");
+            }
+            else
+            {
+                LogToFile("TreeView mouse wheel: ScrollViewer not found");
             }
         }
         catch (Exception ex)
         {
             AddToOutput($"Error handling mouse wheel: {ex.Message}", LogSeverity.ERROR);
+            LogToFile($"Mouse wheel error: {ex.Message}\n{ex.StackTrace}");
+        }
+    }
+    
+    /// <summary>
+    /// Find the ScrollViewer parent of a given element
+    /// </summary>
+    private ScrollViewer? FindScrollViewerParent(DependencyObject element)
+    {
+        try
+        {
+            DependencyObject? parent = VisualTreeHelper.GetParent(element);
+            while (parent != null)
+            {
+                if (parent is ScrollViewer scrollViewer)
+                {
+                    return scrollViewer;
+                }
+                parent = VisualTreeHelper.GetParent(parent);
+            }
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LogToFile($"Error finding ScrollViewer parent: {ex.Message}");
+            return null;
         }
     }
 
@@ -4778,32 +5827,33 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (sender is CheckBox checkBox && 
-                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            if (sender is CheckBox checkBox)
             {
-                _selectedTreeViewItems.Add(treeViewItem);
-                
-                // Try to get the associated HierarchyNode
-                HierarchyNode? node = null;
-                if (treeViewItem.DataContext is HierarchyNode dataNode)
+                // Find the parent TreeViewItem - could be direct parent or further up the tree
+                var treeViewItem = FindParentTreeViewItem(checkBox);
+                if (treeViewItem != null)
                 {
-                    node = dataNode;
-                }
-                else if (treeViewItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
-                {
-                    node = gridNode;
-                }
-
-                if (node != null)
-                {
-                    _selectedNodes.Add(node);
-                    AddToOutput($"✅ Selected: {node.Name} (Total: {_selectedNodes.Count})", LogSeverity.INFO);
+                    _selectedTreeViewItems.Add(treeViewItem);
                     
-                    // Check all child nodes
-                    CheckAllChildNodes(treeViewItem, true);
+                    // Get the HvpNode data from Tag property
+                    var hvpNodeData = treeViewItem.Tag;
+                    if (hvpNodeData != null)
+                    {
+                        // Store selection state in HvpNode data
+                        _selectedHvpNodes.Add(hvpNodeData);
+                        
+                        var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                        AddToOutput($"✅ Selected: {nodeName}", LogSeverity.INFO);
+                        
+                        // Cascade selection to all children in underlying data structure
+                        CascadeSelectionToHvpChildren(hvpNodeData, true);
+                        
+                        // Check all visible child nodes (for already expanded items)
+                        CheckAllChildNodesHvp(treeViewItem, true);
+                    }
+                    
+                    UpdateMultiSelectionStatus();
                 }
-                
-                UpdateMultiSelectionStatus();
             }
         }
         catch (Exception ex)
@@ -4819,37 +5869,66 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (sender is CheckBox checkBox && 
-                checkBox.TemplatedParent is TreeViewItem treeViewItem)
+            if (sender is CheckBox checkBox)
             {
-                _selectedTreeViewItems.Remove(treeViewItem);
-                
-                // Try to get the associated HierarchyNode
-                HierarchyNode? node = null;
-                if (treeViewItem.DataContext is HierarchyNode dataNode)
+                // Find the parent TreeViewItem - could be direct parent or further up the tree
+                var treeViewItem = FindParentTreeViewItem(checkBox);
+                if (treeViewItem != null)
                 {
-                    node = dataNode;
-                }
-                else if (treeViewItem.Header is Grid grid && grid.DataContext is HierarchyNode gridNode)
-                {
-                    node = gridNode;
-                }
-
-                if (node != null)
-                {
-                    _selectedNodes.Remove(node);
-                    AddToOutput($"❌ Deselected: {node.Name} (Total: {_selectedNodes.Count})", LogSeverity.INFO);
+                    _selectedTreeViewItems.Remove(treeViewItem);
                     
-                    // Uncheck all child nodes
-                    CheckAllChildNodes(treeViewItem, false);
+                    // Get the HvpNode data from Tag property
+                    var hvpNodeData = treeViewItem.Tag;
+                    if (hvpNodeData != null)
+                    {
+                        // Remove selection state from HvpNode data
+                        _selectedHvpNodes.Remove(hvpNodeData);
+                        
+                        var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                        AddToOutput($"❌ Deselected: {nodeName}", LogSeverity.INFO);
+                        
+                        // Cascade deselection to all children in underlying data structure
+                        CascadeSelectionToHvpChildren(hvpNodeData, false);
+                        
+                        // Uncheck all visible child nodes (for already expanded items)
+                        CheckAllChildNodesHvp(treeViewItem, false);
+                    }
+                    
+                    UpdateMultiSelectionStatus();
                 }
-                
-                UpdateMultiSelectionStatusCombined();
             }
         }
         catch (Exception ex)
         {
             AddToOutput($"Error handling checkbox deselection: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Handle TreeViewItem expansion event to apply stored selection state to newly visible children
+    /// </summary>
+    private void TreeViewItem_Expanded(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (sender is TreeViewItem expandedItem)
+            {
+                // Apply stored selection state to all child items that are now visible
+                foreach (TreeViewItem childItem in expandedItem.Items.OfType<TreeViewItem>())
+                {
+                    ApplyStoredSelectionState(childItem);
+                    
+                    // If the child is already expanded, recursively apply to its children too
+                    if (childItem.IsExpanded)
+                    {
+                        TreeViewItem_Expanded(childItem, e);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error applying stored selection on expansion: {ex.Message}", LogSeverity.ERROR);
         }
     }
 
@@ -4871,6 +5950,156 @@ public partial class MainWindow : Window
     /// <summary>
     /// Check or uncheck all child nodes recursively
     /// </summary>
+    /// <summary>
+    /// Find the parent TreeViewItem for a checkbox control
+    /// </summary>
+    private TreeViewItem? FindParentTreeViewItem(DependencyObject child)
+    {
+        var parent = VisualTreeHelper.GetParent(child);
+        while (parent != null)
+        {
+            if (parent is TreeViewItem treeViewItem)
+                return treeViewItem;
+            parent = VisualTreeHelper.GetParent(parent);
+        }
+        return null;
+    }
+    
+    /// <summary>
+    /// Check/uncheck all child nodes for HvpNode-based TreeView with cascading selection
+    /// </summary>
+    private void CheckAllChildNodesHvp(TreeViewItem parentItem, bool isChecked)
+    {
+        try
+        {
+            foreach (TreeViewItem childItem in parentItem.Items.OfType<TreeViewItem>())
+            {
+                // Find the checkbox in the child item
+                var checkbox = FindVisualChild<CheckBox>(childItem);
+                if (checkbox != null && checkbox.IsChecked != isChecked)
+                {
+                    // Temporarily remove event handlers to prevent infinite recursion
+                    checkbox.Checked -= TreeViewItem_Checked;
+                    checkbox.Unchecked -= TreeViewItem_Unchecked;
+                    
+                    checkbox.IsChecked = isChecked;
+                    
+                    // Update selection tracking
+                    if (isChecked)
+                    {
+                        _selectedTreeViewItems.Add(childItem);
+                        var hvpNodeData = childItem.Tag;
+                        if (hvpNodeData != null)
+                        {
+                            var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                            AddToOutput($"  ↳ Auto-selected child: {nodeName}", LogSeverity.DEBUG);
+                        }
+                    }
+                    else
+                    {
+                        _selectedTreeViewItems.Remove(childItem);
+                        var hvpNodeData = childItem.Tag;
+                        if (hvpNodeData != null)
+                        {
+                            var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                            AddToOutput($"  ↳ Auto-deselected child: {nodeName}", LogSeverity.DEBUG);
+                        }
+                    }
+                    
+                    // Re-attach event handlers
+                    checkbox.Checked += TreeViewItem_Checked;
+                    checkbox.Unchecked += TreeViewItem_Unchecked;
+                    
+                    // Recursively check children
+                    CheckAllChildNodesHvp(childItem, isChecked);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error checking child nodes: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Cascade selection state to all children in the HvpNode data structure
+    /// </summary>
+    private void CascadeSelectionToHvpChildren(object hvpNodeData, bool isSelected)
+    {
+        try
+        {
+            // Get children from HvpNode using reflection
+            var childrenProperty = hvpNodeData.GetType().GetProperty("Children") ?? 
+                                 hvpNodeData.GetType().GetProperty("children") ??
+                                 hvpNodeData.GetType().GetProperty("CHILDREN");
+            
+            if (childrenProperty != null)
+            {
+                var children = childrenProperty.GetValue(hvpNodeData);
+                if (children is System.Collections.IEnumerable childrenEnumerable)
+                {
+                    foreach (var child in childrenEnumerable)
+                    {
+                        if (child != null)
+                        {
+                            if (isSelected)
+                            {
+                                _selectedHvpNodes.Add(child);
+                            }
+                            else
+                            {
+                                _selectedHvpNodes.Remove(child);
+                            }
+                            
+                            // Recursively cascade to grandchildren
+                            CascadeSelectionToHvpChildren(child, isSelected);
+                        }
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error cascading selection to HvpNode children: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
+    /// <summary>
+    /// Apply stored selection state to a newly generated TreeViewItem
+    /// </summary>
+    private void ApplyStoredSelectionState(TreeViewItem treeViewItem)
+    {
+        try
+        {
+            var hvpNodeData = treeViewItem.Tag;
+            if (hvpNodeData != null && _selectedHvpNodes.Contains(hvpNodeData))
+            {
+                // Find the checkbox and set it to checked without triggering events
+                var checkbox = FindVisualChild<CheckBox>(treeViewItem);
+                if (checkbox != null && checkbox.IsChecked != true)
+                {
+                    // Temporarily remove event handlers to prevent infinite recursion
+                    checkbox.Checked -= TreeViewItem_Checked;
+                    checkbox.Unchecked -= TreeViewItem_Unchecked;
+                    
+                    checkbox.IsChecked = true;
+                    _selectedTreeViewItems.Add(treeViewItem);
+                    
+                    // Re-attach event handlers
+                    checkbox.Checked += TreeViewItem_Checked;
+                    checkbox.Unchecked += TreeViewItem_Unchecked;
+                    
+                    var nodeName = GetHvpNodeProperty(hvpNodeData, "NAME")?.ToString() ?? "Unknown";
+                    AddToOutput($"  ↳ Applied stored selection to: {nodeName}", LogSeverity.DEBUG);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            AddToOutput($"Error applying stored selection state: {ex.Message}", LogSeverity.ERROR);
+        }
+    }
+    
     private void CheckAllChildNodes(TreeViewItem parentItem, bool isChecked)
     {
         try

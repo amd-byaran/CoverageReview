@@ -113,8 +113,8 @@ public class ProjectSettings
         if (SelectedRelease != null && !string.IsNullOrEmpty(SelectedRelease.Name))
         {
             var releaseName = SelectedRelease.Name.ToLower().Replace(".", "_").Replace("-", "_");
-            var coverageTypeStr = CoverageType == CoverageType.Functional ? "func" : "code";
-            JiraEpic = $"{releaseName}_{coverageTypeStr}";
+            var coverageTypeStr = CoverageType == CoverageType.Functional ? "Functional Coverage" : "Code Coverage";
+            JiraEpic = $"DCN {coverageTypeStr} {releaseName}";
         }
         else
         {
@@ -128,7 +128,8 @@ public class ProjectSettings
         {
             var releaseName = SelectedRelease.Name.ToLower().Replace(".", "_").Replace("-", "_");
             var reportName = SelectedReport.Name.ToLower().Replace(".", "_").Replace("-", "_");
-            JiraStory = $"{releaseName}_{reportName}";
+            var coverageTypeStr = CoverageType == CoverageType.Functional ? "Functional Coverage" : "Code Coverage";
+            JiraStory = $"DCN {coverageTypeStr} {releaseName} {reportName}";
         }
         else
         {

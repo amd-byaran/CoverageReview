@@ -1,0 +1,29 @@
+{
+  "projectName": "dcn6_0_dce_verif_plan_func",
+  "projectFolderPath": "C:\\Projects\\coverage_projects\\dcn6_0_dce_verif_plan_func",
+  "selectedRelease": {
+    "id": 1,
+    "name": "dcn6.0",
+    "projectId": 1,
+    "createdAt": "2025-09-28T10:30:00"
+  },
+  "selectedReport": {
+    "id": 15,
+    "name": "dce_verif_plan",
+    "releaseId": 1,
+    "projectName": "dce"
+  },
+  "coverageType": "Functional",
+  "reportType": "Individual",
+  "selectedChangelist": "1234567",
+  "reportPath": "https://logviewer-atl.amd.com/projects/dcn6.0/dce/1234567",
+  "createdAt": "2025-09-28T15:45:00",
+  "lastModified": "2025-09-28T15:45:00",
+  "httpServerUrl": "https://logviewer-atl.amd.com",
+  "hvpTop": "https://logviewer-atl.amd.com/projects/dcn6.0/dce/1234567/hvp.dce.html.gz",
+  "projectTestDef": "https://logviewer-atl.amd.com/projects/dcn6.0/dce/1234567/tests.html.gz",
+  "reportNameWithoutVerifPlan": "dce",
+  "jiraEpic": "dcn6_0_func",
+  "jiraStory": "dcn6_0_dce",
+  "localDataPath": "dcn6_0_dce_verif_plan_func\\data"
+}
